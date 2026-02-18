@@ -60,7 +60,7 @@ redictum-terminal-py/
 | `DirectoryManager` | **Working** | Create audio/, transcripts/, logs/ |
 | `RedictumApp` | **Working** | Orchestrator, wires components |
 | `Diagnostics` | **Working** | Check external dependencies, auto-install |
-| `Daemon` | Stub | PID file, double-fork daemon |
+| `Daemon` | **Working** | PID file, double-fork daemon, signal handling |
 | `AudioRecorder` | Stub | Record via arecord |
 | `AudioProcessor` | Stub | Normalize via ffmpeg |
 | `Transcriber` | Stub | Transcribe via whisper.cpp |

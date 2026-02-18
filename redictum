@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
+import logging
 import os
+import signal
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 VERSION = "1.0.0-dev"
 
 EXIT_OK = 0
 EXIT_ERROR = 1
+
+PID_FILENAME = "redictum.pid"
+LOG_FILENAME = "redictum.log"
+STOP_TIMEOUT = 3.0
 
 PATH_KEYS = ("whisper_cli", "whisper_model")
 REQUIRED_DIRS = ("audio", "transcripts", "logs")
@@ -336,30 +345,183 @@ class Diagnostics:
             print("  \u2713 whisper model")
 
 
+def setup_logging(log_path: Path) -> None:
+    """Configure file-based logging. Called at daemon and interactive startup."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[logging.FileHandler(log_path, encoding="utf-8")],
+    )
+
+
 class Daemon:
-    """Manage daemon lifecycle: PID file, double-fork.
+    """Manage daemon lifecycle: PID file, double-fork, signal handling."""
 
-    [STUB — iteration 2+]
-    """
-
-    def __init__(self, pid_path: Path) -> None:
+    def __init__(self, pid_path: Path, log_path: Path) -> None:
         self._pid_path = pid_path
+        self._log_path = log_path
+        self._stop_event = threading.Event()
 
-    def start(self) -> None:
-        """Start the daemon process."""
-        pass
+    # -- PID management ------------------------------------------------------
+
+    def _read_pid(self) -> int | None:
+        """Read PID from file. Return None if missing or invalid."""
+        try:
+            text = self._pid_path.read_text().strip()
+            return int(text)
+        except (FileNotFoundError, ValueError):
+            return None
+
+    def _is_running(self, pid: int) -> bool:
+        """Check if process with given PID is alive (signal 0)."""
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    def _write_pid(self) -> None:
+        """Write current PID to the PID file."""
+        self._pid_path.write_text(f"{os.getpid()}\n")
+
+    def _cleanup(self) -> None:
+        """Remove PID file (atexit callback)."""
+        try:
+            self._pid_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    # -- Signal handling -----------------------------------------------------
+
+    def _setup_signals(self) -> None:
+        """Register SIGTERM and SIGINT handlers."""
+        signal.signal(signal.SIGTERM, self._handle_signal)
+        signal.signal(signal.SIGINT, self._handle_signal)
+
+    def _handle_signal(self, signum: int, frame: Any) -> None:
+        """Set stop event on signal."""
+        self._stop_event.set()
+        logging.info("Received signal %s, shutting down...", signum)
+
+    # -- Public API ----------------------------------------------------------
+
+    def start(self, target: Callable[[], None]) -> None:
+        """Daemonize via double-fork and run target function.
+
+        Args:
+            target: Callable to run in the daemon process.
+        """
+        # Check for existing daemon
+        pid = self._read_pid()
+        if pid is not None:
+            if self._is_running(pid):
+                raise RedictumError(
+                    f"Daemon is already running (PID {pid})."
+                )
+            # Stale PID file — clean up
+            self._cleanup()
+
+        # First fork
+        try:
+            pid = os.fork()
+        except OSError as exc:
+            raise RedictumError(f"First fork failed: {exc}") from exc
+        if pid > 0:
+            # Parent — wait briefly for child to settle, then exit
+            return
+
+        # Child 1: new session
+        os.setsid()
+        os.umask(0)
+
+        # Second fork
+        try:
+            pid = os.fork()
+        except OSError as exc:
+            sys.exit(1)
+        if pid > 0:
+            # Child 1 exits
+            sys.exit(0)
+
+        # Daemon process (child 2)
+        # Redirect std file descriptors
+        devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull, sys.stdin.fileno())
+
+        # Redirect stdout/stderr to log file
+        log_fd = os.open(
+            str(self._log_path),
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+            0o644,
+        )
+        os.dup2(log_fd, sys.stdout.fileno())
+        os.dup2(log_fd, sys.stderr.fileno())
+        os.close(devnull)
+        os.close(log_fd)
+
+        # Setup logging
+        setup_logging(self._log_path)
+
+        # Write PID file and register cleanup
+        self._write_pid()
+        atexit.register(self._cleanup)
+
+        # Setup signal handlers
+        self._setup_signals()
+
+        logging.info("Daemon started (PID %d)", os.getpid())
+
+        # Run the target
+        try:
+            target()
+        except Exception:
+            logging.exception("Daemon target crashed")
+        finally:
+            logging.info("Daemon stopped (PID %d)", os.getpid())
 
     def stop(self) -> None:
-        """Stop the running daemon process."""
-        pass
+        """Send SIGTERM to the running daemon and wait for it to exit."""
+        pid = self._read_pid()
+        if pid is None:
+            raise RedictumError("Daemon is not running (no PID file).")
+        if not self._is_running(pid):
+            # Stale PID — clean up
+            self._cleanup()
+            raise RedictumError("Daemon is not running (stale PID file removed).")
 
-    def status(self) -> str | None:
-        """Return the PID of the running daemon, or None.
+        os.kill(pid, signal.SIGTERM)
 
-        Returns:
-            PID string if running, None otherwise.
-        """
-        pass
+        # Wait for process to exit
+        deadline = time.monotonic() + STOP_TIMEOUT
+        while time.monotonic() < deadline:
+            if not self._is_running(pid):
+                return
+            time.sleep(0.1)
+
+        print(
+            f"Warning: daemon (PID {pid}) did not exit within "
+            f"{STOP_TIMEOUT}s after SIGTERM.",
+            file=sys.stderr,
+        )
+
+    def status(self) -> int | None:
+        """Return PID if daemon is running, None otherwise. Cleans stale PID."""
+        pid = self._read_pid()
+        if pid is None:
+            return None
+        if self._is_running(pid):
+            return pid
+        # Stale PID
+        self._cleanup()
+        return None
+
+    @property
+    def stop_event(self) -> threading.Event:
+        """Event for the main loop to wait on."""
+        return self._stop_event
 
 
 class AudioRecorder:
@@ -521,15 +683,14 @@ class Housekeeping:
 # ---------------------------------------------------------------------------
 
 class RedictumApp:
-    """Main application orchestrator that wires all components together.
-
-    [Core init works; daemon commands are stubs.]
-    """
+    """Main application orchestrator that wires all components together."""
 
     def __init__(self, script_dir: Path) -> None:
         self._script_dir = script_dir
         self._config_mgr = ConfigManager(script_dir)
         self._dir_mgr = DirectoryManager(script_dir)
+        self._pid_path = script_dir / PID_FILENAME
+        self._log_path = script_dir / "logs" / LOG_FILENAME
 
     def init(self) -> dict[str, Any]:
         """Initialize config, directories, and run diagnostics.
@@ -555,7 +716,20 @@ class RedictumApp:
             Exit code.
         """
         self.init()
-        print("[TODO] Interactive mode — not yet implemented")
+        setup_logging(self._log_path)
+
+        stop_event = threading.Event()
+
+        def handle_signal(signum: int, frame: Any) -> None:
+            stop_event.set()
+
+        signal.signal(signal.SIGINT, handle_signal)
+        signal.signal(signal.SIGTERM, handle_signal)
+
+        print("Running in interactive mode. Press Ctrl+C to stop.")
+        logging.info("Interactive mode started (PID %d)", os.getpid())
+        self._main_loop(stop_event)
+        logging.info("Interactive mode stopped.")
         return EXIT_OK
 
     def run_start(self) -> int:
@@ -565,7 +739,13 @@ class RedictumApp:
             Exit code.
         """
         self.init()
-        print("[TODO] Daemon start — not yet implemented")
+        daemon = Daemon(self._pid_path, self._log_path)
+        print("Starting daemon...")
+
+        def target() -> None:
+            self._main_loop(daemon.stop_event)
+
+        daemon.start(target=target)
         return EXIT_OK
 
     def run_stop(self) -> int:
@@ -574,7 +754,9 @@ class RedictumApp:
         Returns:
             Exit code.
         """
-        print("[TODO] Daemon stop — not yet implemented")
+        daemon = Daemon(self._pid_path, self._log_path)
+        daemon.stop()
+        print("Daemon stopped.")
         return EXIT_OK
 
     def run_status(self) -> int:
@@ -583,8 +765,18 @@ class RedictumApp:
         Returns:
             Exit code.
         """
-        print("[TODO] Daemon status — not yet implemented")
+        daemon = Daemon(self._pid_path, self._log_path)
+        pid = daemon.status()
+        if pid is not None:
+            print(f"Daemon is running (PID {pid})")
+        else:
+            print("Daemon is not running.")
         return EXIT_OK
+
+    def _main_loop(self, stop_event: threading.Event) -> None:
+        """Main loop. [STUB — iteration 4: hotkey + recording + transcription]"""
+        while not stop_event.wait(timeout=1.0):
+            pass
 
 
 # ---------------------------------------------------------------------------
