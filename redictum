@@ -532,16 +532,14 @@ class WhisperInstaller:
             return None
 
     def _find_nvcc(self) -> str | None:
-        """Find nvcc in PATH or common CUDA install locations."""
-        nvcc = shutil.which("nvcc")
-        if nvcc:
-            return nvcc
-        # Check common CUDA install paths
+        """Find nvcc, preferring newest /usr/local/cuda-* over PATH."""
+        # Check /usr/local/cuda-* first (NVIDIA repo installs here)
         for cuda_dir in sorted(Path("/usr/local").glob("cuda-*"), reverse=True):
             candidate = cuda_dir / "bin" / "nvcc"
             if candidate.exists():
                 return str(candidate)
-        return None
+        # Fall back to PATH (may be old distro package)
+        return shutil.which("nvcc")
 
     def _ensure_cuda(self) -> bool:
         """Check CUDA availability, offer to install/upgrade if needed."""
