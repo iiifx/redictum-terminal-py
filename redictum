@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+"""Redictum Terminal — voice-to-text CLI for Linux."""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+VERSION = "1.0.0-dev"
+
+EXIT_OK = 0
+EXIT_ERROR = 1
+
+PATH_KEYS = ("whisper_cli", "whisper_model")
+REQUIRED_DIRS = ("audio", "transcripts", "logs")
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "whisper_cli": "~/whisper.cpp/build/bin/whisper-cli",
+    "whisper_model": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin",
+    "whisper_language": "ru",
+    "sample_rate": 16000,
+    "channels": 1,
+    "normalize_audio": True,
+    "hotkey_start": "<ctrl>+<alt>+a",
+    "hotkey_stop": "<ctrl>+<alt>+a",
+    "auto_paste": True,
+    "sound_feedback": True,
+    "max_audio_files": 50,
+}
+
+
+class RedictumError(Exception):
+    """Base exception for Redictum Terminal errors."""
+
+
+# ---------------------------------------------------------------------------
+# ConfigManager
+# ---------------------------------------------------------------------------
+
+class ConfigManager:
+    """Manages config.json: generation, loading, merging with defaults.
+
+    Config file lives next to the script. Missing keys are filled from
+    DEFAULT_CONFIG; extra keys in the user file are preserved.
+    """
+
+    def __init__(self, script_dir: Path) -> None:
+        self._path = script_dir / "config.json"
+
+    @property
+    def path(self) -> Path:
+        """Return the resolved config file path."""
+        return self._path
+
+    def load(self) -> dict[str, Any]:
+        """Load config from disk or generate a default one.
+
+        Returns:
+            Merged configuration dictionary.
+
+        Raises:
+            RedictumError: If config.json exists but contains invalid JSON.
+        """
+        if not self._path.exists():
+            self._write_default()
+            return self._expand_paths(dict(DEFAULT_CONFIG))
+
+        try:
+            raw = self._path.read_text(encoding="utf-8")
+            user_config: dict[str, Any] = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RedictumError(
+                f"Invalid JSON in {self._path}: {exc}"
+            ) from exc
+
+        merged = dict(DEFAULT_CONFIG)
+        merged.update(user_config)
+        return self._expand_paths(merged)
+
+    # -- private helpers -----------------------------------------------------
+
+    def _write_default(self) -> None:
+        """Write DEFAULT_CONFIG to config.json with pretty formatting."""
+        self._path.write_text(
+            json.dumps(DEFAULT_CONFIG, indent=4, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _expand_paths(config: dict[str, Any]) -> dict[str, Any]:
+        """Expand ``~`` in path-valued keys."""
+        for key in PATH_KEYS:
+            if key in config and isinstance(config[key], str):
+                config[key] = str(Path(config[key]).expanduser())
+        return config
+
+
+# ---------------------------------------------------------------------------
+# DirectoryManager
+# ---------------------------------------------------------------------------
+
+class DirectoryManager:
+    """Creates required working directories next to the script.
+
+    Directories: audio/, transcripts/, logs/.
+    """
+
+    def __init__(self, script_dir: Path) -> None:
+        self._script_dir = script_dir
+
+    def ensure(self) -> None:
+        """Create all required directories if they don't exist."""
+        for name in REQUIRED_DIRS:
+            (self._script_dir / name).mkdir(exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Stubs
+# ---------------------------------------------------------------------------
+
+class Diagnostics:
+    """Check external dependencies (whisper.cpp, ffmpeg, xclip, etc.).
+
+    [STUB — iteration 2+]
+    """
+
+    def check_all(self) -> dict[str, bool]:
+        """Run all dependency checks.
+
+        Returns:
+            Dict mapping dependency name to availability status.
+        """
+        pass
+
+
+class Daemon:
+    """Manage daemon lifecycle: PID file, double-fork.
+
+    [STUB — iteration 2+]
+    """
+
+    def __init__(self, pid_path: Path) -> None:
+        self._pid_path = pid_path
+
+    def start(self) -> None:
+        """Start the daemon process."""
+        pass
+
+    def stop(self) -> None:
+        """Stop the running daemon process."""
+        pass
+
+    def status(self) -> str | None:
+        """Return the PID of the running daemon, or None.
+
+        Returns:
+            PID string if running, None otherwise.
+        """
+        pass
+
+
+class AudioRecorder:
+    """Record microphone audio via arecord.
+
+    [STUB — iteration 2+]
+    """
+
+    def __init__(self, output_dir: Path, sample_rate: int, channels: int) -> None:
+        self._output_dir = output_dir
+        self._sample_rate = sample_rate
+        self._channels = channels
+
+    def start(self) -> None:
+        """Begin recording audio."""
+        pass
+
+    def stop(self) -> Path | None:
+        """Stop recording and return the path to the WAV file.
+
+        Returns:
+            Path to the recorded WAV file, or None on failure.
+        """
+        pass
+
+
+class AudioProcessor:
+    """Normalize audio via ffmpeg.
+
+    [STUB — iteration 2+]
+    """
+
+    def normalize(self, input_path: Path) -> Path:
+        """Normalize audio levels of the given file.
+
+        Args:
+            input_path: Path to the raw audio file.
+
+        Returns:
+            Path to the normalized audio file.
+        """
+        pass
+
+
+class Transcriber:
+    """Transcribe audio via whisper.cpp CLI.
+
+    [STUB — iteration 2+]
+    """
+
+    def __init__(self, whisper_cli: str, model_path: str, language: str) -> None:
+        self._cli = whisper_cli
+        self._model = model_path
+        self._language = language
+
+    def transcribe(self, audio_path: Path) -> str:
+        """Transcribe the given audio file to text.
+
+        Args:
+            audio_path: Path to the audio file.
+
+        Returns:
+            Transcribed text string.
+        """
+        pass
+
+
+class ClipboardManager:
+    """Copy text to clipboard and optionally paste via xdotool.
+
+    [STUB — iteration 2+]
+    """
+
+    def copy(self, text: str) -> None:
+        """Copy text to the system clipboard.
+
+        Args:
+            text: The text to copy.
+        """
+        pass
+
+    def paste(self) -> None:
+        """Simulate Ctrl+V to paste from clipboard."""
+        pass
+
+
+class SoundNotifier:
+    """Generate and play WAV feedback tones.
+
+    [STUB — iteration 2+]
+    """
+
+    def play_start(self) -> None:
+        """Play the 'recording started' tone."""
+        pass
+
+    def play_stop(self) -> None:
+        """Play the 'recording stopped' tone."""
+        pass
+
+    def play_error(self) -> None:
+        """Play the 'error occurred' tone."""
+        pass
+
+
+class HotkeyListener:
+    """Listen for global hotkeys via pynput.
+
+    [STUB — iteration 2+]
+    """
+
+    def __init__(self, hotkey_start: str, hotkey_stop: str) -> None:
+        self._hotkey_start = hotkey_start
+        self._hotkey_stop = hotkey_stop
+
+    def start(self, on_start: Any = None, on_stop: Any = None) -> None:
+        """Start listening for hotkeys.
+
+        Args:
+            on_start: Callback invoked when the start hotkey is pressed.
+            on_stop: Callback invoked when the stop hotkey is pressed.
+        """
+        pass
+
+    def stop(self) -> None:
+        """Stop the hotkey listener."""
+        pass
+
+
+class Housekeeping:
+    """Rotate old audio files and manage log files.
+
+    [STUB — iteration 2+]
+    """
+
+    def __init__(self, audio_dir: Path, max_files: int) -> None:
+        self._audio_dir = audio_dir
+        self._max_files = max_files
+
+    def rotate_audio(self) -> int:
+        """Remove oldest audio files exceeding the limit.
+
+        Returns:
+            Number of files removed.
+        """
+        pass
+
+    def cleanup_logs(self, logs_dir: Path) -> None:
+        """Clean up old log files.
+
+        Args:
+            logs_dir: Path to the logs directory.
+        """
+        pass
+
+
+# ---------------------------------------------------------------------------
+# RedictumApp — orchestrator
+# ---------------------------------------------------------------------------
+
+class RedictumApp:
+    """Main application orchestrator that wires all components together.
+
+    [Core init works; daemon commands are stubs.]
+    """
+
+    def __init__(self, script_dir: Path) -> None:
+        self._script_dir = script_dir
+        self._config_mgr = ConfigManager(script_dir)
+        self._dir_mgr = DirectoryManager(script_dir)
+
+    def init(self) -> dict[str, Any]:
+        """Initialize config and directories.
+
+        Returns:
+            Loaded configuration dictionary.
+        """
+        config = self._config_mgr.load()
+        self._dir_mgr.ensure()
+        return config
+
+    def run_interactive(self) -> int:
+        """Run in interactive (foreground) mode.
+
+        Returns:
+            Exit code.
+        """
+        self.init()
+        print("[TODO] Interactive mode — not yet implemented")
+        return EXIT_OK
+
+    def run_start(self) -> int:
+        """Start the daemon.
+
+        Returns:
+            Exit code.
+        """
+        self.init()
+        print("[TODO] Daemon start — not yet implemented")
+        return EXIT_OK
+
+    def run_stop(self) -> int:
+        """Stop the daemon.
+
+        Returns:
+            Exit code.
+        """
+        print("[TODO] Daemon stop — not yet implemented")
+        return EXIT_OK
+
+    def run_status(self) -> int:
+        """Print daemon status.
+
+        Returns:
+            Exit code.
+        """
+        print("[TODO] Daemon status — not yet implemented")
+        return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build and return the argument parser.
+
+    Returns:
+        Configured ArgumentParser instance.
+    """
+    parser = argparse.ArgumentParser(
+        prog="redictum",
+        description="Redictum Terminal — voice-to-text CLI for Linux.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"redictum {VERSION}",
+    )
+
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("start", help="Start the daemon")
+    sub.add_parser("stop", help="Stop the daemon")
+    sub.add_parser("status", help="Show daemon status")
+
+    return parser
+
+
+def main() -> int:
+    """Entry point for Redictum Terminal.
+
+    Returns:
+        Exit code (0 = success, 1 = error).
+    """
+    parser = build_parser()
+    args = parser.parse_args()
+
+    script_dir = Path(__file__).resolve().parent
+    app = RedictumApp(script_dir)
+
+    try:
+        if args.command is None:
+            return app.run_interactive()
+        if args.command == "start":
+            return app.run_start()
+        if args.command == "stop":
+            return app.run_stop()
+        if args.command == "status":
+            return app.run_status()
+    except RedictumError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
