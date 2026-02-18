@@ -405,12 +405,12 @@ class Diagnostics:
         else:
             _rprint(
                 "[yellow]Skipping. You can install later with:[/yellow] "
-                "[bold]./redictum install-whisper[/bold]"
+                "[bold]./redictum whisper[/bold]"
             )
 
 
 class WhisperInstaller:
-    """Install whisper.cpp from source and download a model."""
+    """Setup wizard for whisper.cpp: install, configure, reconfigure."""
 
     REPO_URL = "https://github.com/ggerganov/whisper.cpp.git"
     HF_BASE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
@@ -429,22 +429,26 @@ class WhisperInstaller:
         self._config_mgr = config_mgr
         self._install_dir = Path.home() / "whisper.cpp"
 
+    # -- Public API ----------------------------------------------------------
+
     def install(self) -> None:
-        """Run the full whisper.cpp installation flow."""
-        _rprint("\n[bold]whisper.cpp Installer[/bold]")
+        """Smart setup: detect state, install/reconfigure as needed."""
+        _rprint("\n[bold]whisper.cpp Setup[/bold]")
 
         cli_path = self._install_dir / "build" / "bin" / "whisper-cli"
-        if cli_path.exists():
-            _rprint(f"  [green]\u2713[/green] whisper-cli already exists at {cli_path}")
-            if not self._confirm("  Rebuild whisper.cpp? [y/n]: "):
-                model_path = self._ensure_model()
-                self._update_config(cli_path, model_path)
-                return
-        else:
-            self._clone()
 
-        use_cuda = self._detect_cuda()
-        self._build(use_cuda)
+        if cli_path.exists():
+            self._reconfigure(cli_path)
+        else:
+            self._fresh_install()
+
+    # -- Flows ---------------------------------------------------------------
+
+    def _fresh_install(self) -> None:
+        """Full install: ensure CUDA, clone, build, download model."""
+        cuda_available = self._ensure_cuda()
+        self._clone()
+        self._build(use_cuda=cuda_available)
 
         cli_path = self._install_dir / "build" / "bin" / "whisper-cli"
         if not cli_path.exists():
@@ -454,7 +458,89 @@ class WhisperInstaller:
 
         model_path = self._select_and_download()
         self._update_config(cli_path, model_path)
-        _rprint("\n[green]whisper.cpp installation complete![/green]")
+        _rprint("\n[green]whisper.cpp setup complete![/green]")
+
+    def _reconfigure(self, cli_path: Path) -> None:
+        """Re-check existing install, offer improvements."""
+        cuda_linked = self._is_cuda_linked(cli_path)
+        cuda_available = self._is_cuda_available()
+
+        if cuda_linked:
+            _rprint("  [green]\u2713[/green] whisper.cpp [bold](CUDA)[/bold]")
+        else:
+            _rprint("  [green]\u2713[/green] whisper.cpp [dim](CPU-only)[/dim]")
+
+        # Offer CUDA rebuild if beneficial
+        need_rebuild = False
+        if not cuda_linked and cuda_available:
+            _rprint("  [yellow]\u26a0[/yellow] CUDA available but whisper.cpp built without it")
+            if self._confirm("  Rebuild with CUDA for GPU acceleration? [y/n]: "):
+                need_rebuild = True
+        elif not cuda_linked and not cuda_available:
+            if shutil.which("nvidia-smi"):
+                _rprint("  [yellow]\u26a0[/yellow] NVIDIA GPU detected but CUDA toolkit missing")
+                if self._confirm("  Install CUDA toolkit and rebuild? [y/n]: "):
+                    if self._install_cuda_toolkit():
+                        need_rebuild = True
+
+        if need_rebuild:
+            self._clone()
+            self._build(use_cuda=True)
+            cli_path = self._install_dir / "build" / "bin" / "whisper-cli"
+
+        model_path = self._ensure_model()
+        self._update_config(cli_path, model_path)
+
+        if need_rebuild:
+            _rprint("\n[green]whisper.cpp reconfigured![/green]")
+
+    # -- CUDA ----------------------------------------------------------------
+
+    def _is_cuda_available(self) -> bool:
+        """Check if nvcc is in PATH."""
+        return shutil.which("nvcc") is not None
+
+    def _is_cuda_linked(self, cli_path: Path) -> bool:
+        """Check if the binary links against CUDA libraries."""
+        try:
+            result = subprocess.run(
+                ["ldd", str(cli_path)],
+                capture_output=True, text=True, timeout=10,
+            )
+            output = result.stdout.lower()
+            return "cuda" in output or "cublas" in output
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+
+    def _ensure_cuda(self) -> bool:
+        """Check CUDA availability, offer to install toolkit if GPU present."""
+        if shutil.which("nvcc"):
+            _rprint("  [green]\u2713[/green] CUDA toolkit")
+            return True
+
+        if shutil.which("nvidia-smi"):
+            _rprint("  [yellow]\u26a0[/yellow] NVIDIA GPU detected but CUDA toolkit not installed")
+            if self._confirm("  Install nvidia-cuda-toolkit for GPU acceleration? [y/n]: "):
+                if self._install_cuda_toolkit():
+                    return True
+            _rprint("  [dim]Continuing with CPU-only build[/dim]")
+        else:
+            _rprint("  [dim]No NVIDIA GPU detected, building CPU-only[/dim]")
+
+        return False
+
+    def _install_cuda_toolkit(self) -> bool:
+        """Install nvidia-cuda-toolkit via apt."""
+        cmd = ["sudo", "apt", "install", "-y", "nvidia-cuda-toolkit"]
+        _rprint(f"  [dim]Running: {' '.join(cmd)}[/dim]")
+        result = subprocess.run(cmd)
+        if result.returncode == 0 and shutil.which("nvcc"):
+            _rprint("  [green]\u2713[/green] CUDA toolkit installed")
+            return True
+        _rprint("  [yellow]\u26a0[/yellow] CUDA toolkit installation failed")
+        return False
+
+    # -- Clone / Build -------------------------------------------------------
 
     def _confirm(self, prompt: str) -> bool:
         """Ask the user y/n."""
@@ -468,11 +554,10 @@ class WhisperInstaller:
     def _clone(self) -> None:
         """Clone or update the whisper.cpp repository."""
         if self._install_dir.exists():
-            _rprint(f"  [yellow]\u26a0[/yellow] {self._install_dir} exists, pulling latest...")
+            _rprint(f"  Updating {self._install_dir}...")
             result = subprocess.run(
                 ["git", "-C", str(self._install_dir), "pull"],
-                capture_output=True,
-                text=True,
+                capture_output=True, text=True,
             )
             if result.returncode != 0:
                 raise RedictumError(f"git pull failed: {result.stderr[:200]}")
@@ -487,17 +572,15 @@ class WhisperInstaller:
                 raise RedictumError("git clone failed")
             _rprint("  [green]\u2713[/green] Repository cloned")
 
-    def _detect_cuda(self) -> bool:
-        """Check if CUDA toolkit is available."""
-        if shutil.which("nvcc"):
-            _rprint("  [green]\u2713[/green] CUDA detected, building with GPU support")
-            return True
-        _rprint("  [dim]CUDA not found, building CPU-only[/dim]")
-        return False
-
     def _build(self, use_cuda: bool) -> None:
         """Configure and build whisper.cpp."""
-        _rprint("  Configuring build...")
+        # Clean previous build
+        build_dir = self._install_dir / "build"
+        if build_dir.exists():
+            shutil.rmtree(build_dir)
+
+        mode = "CUDA" if use_cuda else "CPU"
+        _rprint(f"  Configuring build ({mode})...")
         cmake_args = [
             "cmake", "-B", "build",
             "-DCMAKE_BUILD_TYPE=Release",
@@ -508,30 +591,42 @@ class WhisperInstaller:
         result = subprocess.run(
             cmake_args,
             cwd=str(self._install_dir),
-            capture_output=True,
-            text=True,
+            capture_output=True, text=True,
         )
         if result.returncode != 0:
+            if use_cuda:
+                _rprint("  [yellow]\u26a0[/yellow] CUDA configure failed:")
+                for line in result.stderr.strip().split("\n")[-3:]:
+                    _rprint(f"    [dim]{line}[/dim]")
+                _rprint("  Retrying with CPU-only...")
+                self._build(use_cuda=False)
+                return
             raise RedictumError(
                 f"cmake configure failed:\n{result.stderr[:500]}"
             )
-        _rprint("  [green]\u2713[/green] Build configured")
+        _rprint(f"  [green]\u2713[/green] Configured ({mode})")
 
         jobs = os.cpu_count() or 1
-        _rprint(f"  Building whisper.cpp ({jobs} jobs, may take several minutes)...")
+        _rprint(f"  Building ({jobs} jobs, may take several minutes)...")
         result = subprocess.run(
             ["cmake", "--build", "build", "--config", "Release",
              "-j", str(jobs)],
             cwd=str(self._install_dir),
+            capture_output=True, text=True,
         )
         if result.returncode != 0:
             if use_cuda:
-                _rprint("  [yellow]\u26a0[/yellow] CUDA build failed, retrying CPU-only...")
-                shutil.rmtree(self._install_dir / "build", ignore_errors=True)
+                err = result.stderr or result.stdout or ""
+                _rprint("  [yellow]\u26a0[/yellow] CUDA build failed:")
+                for line in err.strip().split("\n")[-5:]:
+                    _rprint(f"    [dim]{line}[/dim]")
+                _rprint("  Retrying with CPU-only...")
                 self._build(use_cuda=False)
                 return
             raise RedictumError("cmake build failed")
-        _rprint("  [green]\u2713[/green] Build complete")
+        _rprint(f"  [green]\u2713[/green] Build complete ({mode})")
+
+    # -- Model ---------------------------------------------------------------
 
     def _select_and_download(self) -> Path:
         """Let the user pick a model and download it."""
@@ -587,7 +682,6 @@ class WhisperInstaller:
 
         result = subprocess.run(cmd)
         if result.returncode != 0 or not model_path.exists():
-            # Clean up partial download
             if model_path.exists():
                 model_path.unlink()
             raise RedictumError(f"Model download failed: {filename}")
@@ -600,16 +694,17 @@ class WhisperInstaller:
         config = self._config_mgr.load()
         model_path_str = config.get("whisper_model", "")
         if model_path_str and Path(model_path_str).exists():
-            _rprint(f"  [green]\u2713[/green] Model found: {model_path_str}")
+            _rprint(f"  [green]\u2713[/green] Model: {Path(model_path_str).name}")
             return Path(model_path_str)
         return self._select_and_download()
+
+    # -- Config --------------------------------------------------------------
 
     def _update_config(self, cli_path: Path, model_path: Path) -> None:
         """Write whisper paths to config.json."""
         home = str(Path.home())
         cli_str = str(cli_path)
         model_str = str(model_path)
-        # Use ~ for readability in config
         if cli_str.startswith(home):
             cli_str = "~" + cli_str[len(home):]
         if model_str.startswith(home):
@@ -618,7 +713,7 @@ class WhisperInstaller:
             "whisper_cli": cli_str,
             "whisper_model": model_str,
         })
-        _rprint("  [green]\u2713[/green] Config updated with whisper paths")
+        _rprint("  [green]\u2713[/green] Config updated")
 
 
 def setup_logging(log_path: Path) -> None:
@@ -1386,8 +1481,8 @@ class RedictumApp:
             _rprint("[yellow]Daemon is not running.[/yellow]")
         return EXIT_OK
 
-    def run_install_whisper(self) -> int:
-        """Install whisper.cpp and download a model.
+    def run_whisper(self) -> int:
+        """Setup whisper.cpp: install, check, or reconfigure.
 
         Returns:
             Exit code.
@@ -1555,7 +1650,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start", help="Start the daemon")
     sub.add_parser("stop", help="Stop the daemon")
     sub.add_parser("status", help="Show daemon status")
-    sub.add_parser("install-whisper", help="Install whisper.cpp and download a model")
+    sub.add_parser("whisper", help="Setup whisper.cpp (install, check, reconfigure)")
 
     return parser
 
@@ -1581,8 +1676,8 @@ def main() -> int:
             return app.run_stop()
         if args.command == "status":
             return app.run_status()
-        if args.command == "install-whisper":
-            return app.run_install_whisper()
+        if args.command == "whisper":
+            return app.run_whisper()
     except RedictumError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_ERROR

@@ -50,7 +50,7 @@ redictum-terminal-py/
 | `./redictum start` | Start daemon |
 | `./redictum stop` | Stop daemon |
 | `./redictum status` | Show daemon status |
-| `./redictum install-whisper` | Install whisper.cpp and download model |
+| `./redictum whisper` | Setup whisper.cpp (install, check, reconfigure) |
 | `./redictum --version` | Print version |
 | `./redictum --help` | Show help |
 
