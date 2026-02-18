@@ -68,7 +68,7 @@ redictum-terminal-py/
 | `ClipboardManager` | **Working** | xclip copy + xdotool paste |
 | `SoundNotifier` | **Working** | WAV feedback tones via paplay |
 | `HotkeyListener` | **Working** | Push-to-talk via pynput (hold delay) |
-| `Housekeeping` | **Working** | Rotate audio files, clean logs (stub) |
+| `Housekeeping` | **Partial** | Rotate audio (working), log cleanup (stub) |
 | `WhisperInstaller` | **Working** | Clone, build whisper.cpp, download models |
 
 ## AI Context Files
