@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,6 +18,17 @@ EXIT_ERROR = 1
 
 PATH_KEYS = ("whisper_cli", "whisper_model")
 REQUIRED_DIRS = ("audio", "transcripts", "logs")
+
+APT_PACKAGES: dict[str, str] = {
+    "ffmpeg": "ffmpeg",
+    "xclip": "xclip",
+    "xdotool": "xdotool",
+    "cmake": "cmake",
+    "build-essential": "build-essential",
+    "git": "git",
+}
+
+PIP_PACKAGES: tuple[str, ...] = ("pynput", "rich")
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "whisper_cli": "~/whisper.cpp/build/bin/whisper-cli",
@@ -121,18 +135,205 @@ class DirectoryManager:
 # ---------------------------------------------------------------------------
 
 class Diagnostics:
-    """Check external dependencies (whisper.cpp, ffmpeg, xclip, etc.).
+    """Check external dependencies and offer auto-installation.
 
-    [STUB — iteration 2+]
+    Stage 1 — critical checks (fail fast): Python 3.10+, Linux, PulseAudio,
+    ALSA, X11. If any fail, raise RedictumError.
+
+    Stage 2 — installable dependencies (auto-fix): apt and pip packages.
+    Offer to install missing ones, user confirms with y/n.
+
+    whisper.cpp — warning only (auto-install in iteration 6).
     """
 
-    def check_all(self) -> dict[str, bool]:
-        """Run all dependency checks.
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = config
 
-        Returns:
-            Dict mapping dependency name to availability status.
-        """
-        pass
+    # -- Stage 1: critical checks -------------------------------------------
+
+    def run_stage1(self) -> None:
+        """Run all critical checks. Raise RedictumError on first failure."""
+        print("Checking dependencies...")
+        self._check_python()
+        self._check_linux()
+        self._check_pulseaudio()
+        self._check_alsa()
+        self._check_x11()
+
+    def _check_python(self) -> None:
+        ver = sys.version_info
+        label = f"Python {ver.major}.{ver.minor}.{ver.micro}"
+        if ver >= (3, 10):
+            print(f"  \u2713 {label}")
+        else:
+            print(f"  \u2717 {label}")
+            raise RedictumError(
+                f"Python 3.10+ is required, found {label}."
+            )
+
+    def _check_linux(self) -> None:
+        if sys.platform == "linux":
+            print("  \u2713 Linux")
+        else:
+            print(f"  \u2717 Linux — detected {sys.platform}")
+            raise RedictumError(
+                f"Linux is required, detected platform: {sys.platform}."
+            )
+
+    def _check_pulseaudio(self) -> None:
+        if shutil.which("paplay"):
+            print("  \u2713 PulseAudio (paplay)")
+        else:
+            print("  \u2717 PulseAudio (paplay) \u2014 not found")
+            raise RedictumError(
+                "PulseAudio (paplay) is required but not found.\n"
+                "Install it manually: sudo apt install pulseaudio-utils"
+            )
+
+    def _check_alsa(self) -> None:
+        if shutil.which("arecord"):
+            print("  \u2713 ALSA (arecord)")
+        else:
+            print("  \u2717 ALSA (arecord) \u2014 not found")
+            raise RedictumError(
+                "ALSA (arecord) is required but not found.\n"
+                "Install it manually: sudo apt install alsa-utils"
+            )
+
+    def _check_x11(self) -> None:
+        if os.environ.get("DISPLAY"):
+            print("  \u2713 X11 (DISPLAY)")
+        else:
+            print("  \u2717 X11 (DISPLAY) \u2014 not set")
+            raise RedictumError(
+                "X11 display is required but DISPLAY is not set.\n"
+                "Run from an X11 session or set DISPLAY manually."
+            )
+
+    # -- Stage 2: installable dependencies ----------------------------------
+
+    def run_stage2(self) -> None:
+        """Find missing installable deps and offer to install them."""
+        missing_apt = self._find_missing_apt()
+        missing_pip = self._find_missing_pip()
+
+        if not missing_apt and not missing_pip:
+            return
+
+        # Print summary of missing packages
+        if missing_apt:
+            print(f"\nMissing system packages: {', '.join(missing_apt)}")
+        if missing_pip:
+            print(f"Missing Python packages: {', '.join(missing_pip)}")
+
+        if not self._confirm("\nInstall missing dependencies? [y/n]: "):
+            print("Skipping installation. Some features may not work.")
+            return
+
+        ok = True
+        if missing_apt:
+            if self._has_apt():
+                if not self._install_apt(missing_apt):
+                    ok = False
+            else:
+                print(
+                    "apt not found. Install manually:\n  "
+                    + " ".join(missing_apt)
+                )
+                ok = False
+        if missing_pip:
+            if not self._install_pip(missing_pip):
+                ok = False
+
+        if ok:
+            print("All dependencies installed.")
+        else:
+            print("Some dependencies failed to install.")
+
+    def _find_missing_apt(self) -> list[str]:
+        """Return list of missing apt package names."""
+        missing: list[str] = []
+        for name, package in APT_PACKAGES.items():
+            if name == "build-essential":
+                found = self._check_dpkg(package)
+            else:
+                found = shutil.which(name) is not None
+            if found:
+                print(f"  \u2713 {name}")
+            else:
+                print(f"  \u2717 {name}")
+                missing.append(package)
+        return missing
+
+    def _find_missing_pip(self) -> list[str]:
+        """Return list of missing pip package names."""
+        missing: list[str] = []
+        for package in PIP_PACKAGES:
+            try:
+                __import__(package)
+                print(f"  \u2713 {package}")
+            except ImportError:
+                print(f"  \u2717 {package}")
+                missing.append(package)
+        return missing
+
+    def _install_apt(self, packages: list[str]) -> bool:
+        """Run sudo apt install for the given packages. Return success."""
+        cmd = ["sudo", "apt", "install", "-y", *packages]
+        print(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd)
+        return result.returncode == 0
+
+    def _install_pip(self, packages: list[str]) -> bool:
+        """Run pip install for the given packages. Return success."""
+        cmd = ["pip", "install", *packages]
+        print(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd)
+        return result.returncode == 0
+
+    def _has_apt(self) -> bool:
+        """Check if apt is available (Debian/Ubuntu/Mint)."""
+        return shutil.which("apt") is not None
+
+    def _check_dpkg(self, package: str) -> bool:
+        """Check if a package is installed via dpkg -s."""
+        try:
+            result = subprocess.run(
+                ["dpkg", "-s", package],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return result.returncode == 0
+        except FileNotFoundError:
+            return False
+
+    def _confirm(self, prompt: str) -> bool:
+        """Ask the user y/n via input()."""
+        try:
+            answer = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        return answer in ("y", "yes")
+
+    # -- whisper.cpp: warning only ------------------------------------------
+
+    def check_whisper(self) -> None:
+        """Warn if whisper.cpp binary or model is missing."""
+        cli_path = self._config.get("whisper_cli", "")
+        model_path = self._config.get("whisper_model", "")
+
+        if not Path(cli_path).exists():
+            print(f"  \u26a0 whisper.cpp not found at {cli_path}")
+            print("    Run: ./redictum install-whisper (iteration 6)")
+        else:
+            print("  \u2713 whisper.cpp")
+
+        if not Path(model_path).exists():
+            print(f"  \u26a0 whisper model not found at {model_path}")
+            print("    Run: ./redictum install-whisper (iteration 6)")
+        else:
+            print("  \u2713 whisper model")
 
 
 class Daemon:
@@ -331,13 +532,20 @@ class RedictumApp:
         self._dir_mgr = DirectoryManager(script_dir)
 
     def init(self) -> dict[str, Any]:
-        """Initialize config and directories.
+        """Initialize config, directories, and run diagnostics.
 
         Returns:
             Loaded configuration dictionary.
+
+        Raises:
+            RedictumError: If a critical dependency is missing.
         """
         config = self._config_mgr.load()
         self._dir_mgr.ensure()
+        diag = Diagnostics(config)
+        diag.run_stage1()
+        diag.run_stage2()
+        diag.check_whisper()
         return config
 
     def run_interactive(self) -> int:

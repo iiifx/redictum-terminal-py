@@ -59,7 +59,7 @@ redictum-terminal-py/
 | `ConfigManager` | **Working** | Load/generate/merge config.json |
 | `DirectoryManager` | **Working** | Create audio/, transcripts/, logs/ |
 | `RedictumApp` | **Working** | Orchestrator, wires components |
-| `Diagnostics` | Stub | Check external dependencies |
+| `Diagnostics` | **Working** | Check external dependencies, auto-install |
 | `Daemon` | Stub | PID file, double-fork daemon |
 | `AudioRecorder` | Stub | Record via arecord |
 | `AudioProcessor` | Stub | Normalize via ffmpeg |
