@@ -463,7 +463,6 @@ class WhisperInstaller:
     def _reconfigure(self, cli_path: Path) -> None:
         """Re-check existing install, offer improvements."""
         cuda_linked = self._is_cuda_linked(cli_path)
-        cuda_available = self._is_cuda_available()
 
         if cuda_linked:
             _rprint("  [green]\u2713[/green] whisper.cpp [bold](CUDA)[/bold]")
@@ -472,16 +471,12 @@ class WhisperInstaller:
 
         # Offer CUDA rebuild if beneficial
         need_rebuild = False
-        if not cuda_linked and cuda_available:
-            _rprint("  [yellow]\u26a0[/yellow] CUDA available but whisper.cpp built without it")
-            if self._confirm("  Rebuild with CUDA for GPU acceleration? [y/n]: "):
-                need_rebuild = True
-        elif not cuda_linked and not cuda_available:
-            if shutil.which("nvidia-smi"):
-                _rprint("  [yellow]\u26a0[/yellow] NVIDIA GPU detected but CUDA toolkit missing")
-                if self._confirm("  Install CUDA toolkit and rebuild? [y/n]: "):
-                    if self._install_cuda_toolkit():
-                        need_rebuild = True
+        if not cuda_linked:
+            cuda_ok = self._ensure_cuda()
+            if cuda_ok:
+                _rprint("  [yellow]\u26a0[/yellow] CUDA ready but whisper.cpp built without it")
+                if self._confirm("  Rebuild with CUDA for GPU acceleration? [y/n]: "):
+                    need_rebuild = True
 
         if need_rebuild:
             self._clone()
@@ -496,9 +491,16 @@ class WhisperInstaller:
 
     # -- CUDA ----------------------------------------------------------------
 
+    CUDA_MIN_VERSION = 12
+    CUDA_KEYRING_URL = (
+        "https://developer.download.nvidia.com/compute/cuda/repos"
+        "/{distro}/x86_64/cuda-keyring_1.1-1_all.deb"
+    )
+
     def _is_cuda_available(self) -> bool:
-        """Check if nvcc is in PATH."""
-        return shutil.which("nvcc") is not None
+        """Check if a modern enough nvcc is available."""
+        ver = self._get_nvcc_version()
+        return ver is not None and ver >= self.CUDA_MIN_VERSION
 
     def _is_cuda_linked(self, cli_path: Path) -> bool:
         """Check if the binary links against CUDA libraries."""
@@ -512,32 +514,132 @@ class WhisperInstaller:
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
 
+    def _get_nvcc_version(self) -> int | None:
+        """Return major CUDA version from nvcc, or None."""
+        nvcc = self._find_nvcc()
+        if not nvcc:
+            return None
+        try:
+            result = subprocess.run(
+                [nvcc, "--version"],
+                capture_output=True, text=True, timeout=10,
+            )
+            # Parse "release 12.8, V12.8.61"
+            import re
+            m = re.search(r"release (\d+)\.", result.stdout)
+            return int(m.group(1)) if m else None
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+
+    def _find_nvcc(self) -> str | None:
+        """Find nvcc in PATH or common CUDA install locations."""
+        nvcc = shutil.which("nvcc")
+        if nvcc:
+            return nvcc
+        # Check common CUDA install paths
+        for cuda_dir in sorted(Path("/usr/local").glob("cuda-*"), reverse=True):
+            candidate = cuda_dir / "bin" / "nvcc"
+            if candidate.exists():
+                return str(candidate)
+        return None
+
     def _ensure_cuda(self) -> bool:
-        """Check CUDA availability, offer to install toolkit if GPU present."""
-        if shutil.which("nvcc"):
-            _rprint("  [green]\u2713[/green] CUDA toolkit")
+        """Check CUDA availability, offer to install/upgrade if needed."""
+        nvcc_ver = self._get_nvcc_version()
+        if nvcc_ver is not None and nvcc_ver >= self.CUDA_MIN_VERSION:
+            _rprint(f"  [green]\u2713[/green] CUDA toolkit {nvcc_ver}")
             return True
 
-        if shutil.which("nvidia-smi"):
-            _rprint("  [yellow]\u26a0[/yellow] NVIDIA GPU detected but CUDA toolkit not installed")
-            if self._confirm("  Install nvidia-cuda-toolkit for GPU acceleration? [y/n]: "):
-                if self._install_cuda_toolkit():
-                    return True
-            _rprint("  [dim]Continuing with CPU-only build[/dim]")
-        else:
+        if not shutil.which("nvidia-smi"):
             _rprint("  [dim]No NVIDIA GPU detected, building CPU-only[/dim]")
+            return False
 
+        if nvcc_ver is not None:
+            _rprint(
+                f"  [yellow]\u26a0[/yellow] CUDA toolkit {nvcc_ver} is too old "
+                f"(need {self.CUDA_MIN_VERSION}+)"
+            )
+        else:
+            _rprint("  [yellow]\u26a0[/yellow] NVIDIA GPU detected but CUDA toolkit not installed")
+
+        if self._confirm("  Install CUDA toolkit from NVIDIA repository? [y/n]: "):
+            if self._install_cuda_toolkit():
+                return True
+        _rprint("  [dim]Continuing with CPU-only build[/dim]")
         return False
 
+    def _detect_ubuntu_distro(self) -> str | None:
+        """Detect Ubuntu base for NVIDIA repo (e.g. 'ubuntu2204')."""
+        try:
+            text = Path("/etc/os-release").read_text()
+        except FileNotFoundError:
+            return None
+        # Mint, Pop!_OS etc. have UBUNTU_CODENAME
+        import re
+        m = re.search(r'UBUNTU_CODENAME=(\w+)', text)
+        if not m:
+            m = re.search(r'VERSION_CODENAME=(\w+)', text)
+        if not m:
+            return None
+        codename = m.group(1)
+        codename_map: dict[str, str] = {
+            "focal": "ubuntu2004",
+            "jammy": "ubuntu2204",
+            "noble": "ubuntu2404",
+        }
+        return codename_map.get(codename)
+
     def _install_cuda_toolkit(self) -> bool:
-        """Install nvidia-cuda-toolkit via apt."""
-        cmd = ["sudo", "apt", "install", "-y", "nvidia-cuda-toolkit"]
-        _rprint(f"  [dim]Running: {' '.join(cmd)}[/dim]")
-        result = subprocess.run(cmd)
-        if result.returncode == 0 and shutil.which("nvcc"):
-            _rprint("  [green]\u2713[/green] CUDA toolkit installed")
+        """Install CUDA toolkit from NVIDIA apt repository."""
+        distro = self._detect_ubuntu_distro()
+        if not distro:
+            _rprint(
+                "  [yellow]\u26a0[/yellow] Could not detect Ubuntu version. "
+                "Install CUDA toolkit manually:\n"
+                "    https://developer.nvidia.com/cuda-downloads"
+            )
+            return False
+
+        _rprint(f"  Detected base: {distro}")
+
+        # Download and install keyring
+        keyring_url = self.CUDA_KEYRING_URL.format(distro=distro)
+        keyring_deb = Path(tempfile.gettempdir()) / "cuda-keyring.deb"
+        _rprint("  [dim]Downloading NVIDIA CUDA keyring...[/dim]")
+        dl_cmd: list[str] = []
+        if shutil.which("curl"):
+            dl_cmd = ["curl", "-fsSL", "-o", str(keyring_deb), keyring_url]
+        elif shutil.which("wget"):
+            dl_cmd = ["wget", "-q", "-O", str(keyring_deb), keyring_url]
+        else:
+            _rprint("  [red]Neither curl nor wget found[/red]")
+            return False
+
+        if subprocess.run(dl_cmd).returncode != 0:
+            _rprint("  [yellow]\u26a0[/yellow] Failed to download CUDA keyring")
+            return False
+
+        _rprint("  [dim]Installing CUDA keyring and toolkit (sudo required)...[/dim]")
+        install_script = (
+            f"sudo dpkg -i {keyring_deb}"
+            f" && sudo apt-get update -qq"
+            f" && sudo apt-get install -y cuda-toolkit"
+        )
+        result = subprocess.run(["bash", "-c", install_script])
+        # Clean up
+        keyring_deb.unlink(missing_ok=True)
+
+        if result.returncode != 0:
+            _rprint("  [yellow]\u26a0[/yellow] CUDA toolkit installation failed")
+            return False
+
+        # Verify new nvcc
+        ver = self._get_nvcc_version()
+        if ver and ver >= self.CUDA_MIN_VERSION:
+            _rprint(f"  [green]\u2713[/green] CUDA toolkit {ver} installed")
             return True
-        _rprint("  [yellow]\u26a0[/yellow] CUDA toolkit installation failed")
+
+        _rprint("  [yellow]\u26a0[/yellow] CUDA installed but nvcc not found in PATH")
         return False
 
     # -- Clone / Build -------------------------------------------------------
@@ -587,6 +689,9 @@ class WhisperInstaller:
         ]
         if use_cuda:
             cmake_args.append("-DGGML_CUDA=ON")
+            nvcc = self._find_nvcc()
+            if nvcc and nvcc != shutil.which("nvcc"):
+                cmake_args.append(f"-DCMAKE_CUDA_COMPILER={nvcc}")
 
         result = subprocess.run(
             cmake_args,
