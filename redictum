@@ -710,7 +710,11 @@ class WhisperInstaller:
         _rprint(f"  [green]\u2713[/green] Configured ({mode})")
 
         jobs = os.cpu_count() or 1
-        _rprint(f"  Building ({jobs} jobs, may take several minutes)...")
+        if use_cuda:
+            _rprint(f"  Building ({mode}, {jobs} jobs)...")
+            _rprint("  [yellow]CUDA build takes 10-15 min. Do not interrupt![/yellow]")
+        else:
+            _rprint(f"  Building ({mode}, {jobs} jobs, may take several minutes)...")
         result = subprocess.run(
             ["cmake", "--build", "build", "--config", "Release",
              "-j", str(jobs)],
