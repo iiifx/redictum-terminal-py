@@ -6,16 +6,25 @@ import argparse
 import atexit
 import json
 import logging
+import math
 import os
 import signal
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+
+try:
+    from rich.console import Console
+    _console: Console | None = Console(highlight=False)
+except ImportError:
+    _console = None
 
 VERSION = "1.0.0-dev"
 
@@ -60,12 +69,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "text_prefix": "",
     "text_postfix": "",
     "sound_feedback": True,
+    "sound_volume": 50,
     "max_audio_files": 50,
 }
 
 
 class RedictumError(Exception):
     """Base exception for Redictum Terminal errors."""
+
+
+def _rprint(text: str) -> None:
+    """Print with rich markup if available, plain print otherwise."""
+    if _console is not None:
+        _console.print(text)
+    else:
+        import re
+        print(re.sub(r"\[/?[^\]]*\]", "", text))
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +191,7 @@ class Diagnostics:
 
     def run_stage1(self) -> None:
         """Run all critical checks. Raise RedictumError on first failure."""
-        print("Checking dependencies...")
+        _rprint("[bold]Checking dependencies...[/bold]")
         self._check_python()
         self._check_linux()
         self._check_pulseaudio()
@@ -183,27 +202,27 @@ class Diagnostics:
         ver = sys.version_info
         label = f"Python {ver.major}.{ver.minor}.{ver.micro}"
         if ver >= (3, 10):
-            print(f"  \u2713 {label}")
+            _rprint(f"  [green]\u2713[/green] {label}")
         else:
-            print(f"  \u2717 {label}")
+            _rprint(f"  [red]\u2717[/red] {label}")
             raise RedictumError(
                 f"Python 3.10+ is required, found {label}."
             )
 
     def _check_linux(self) -> None:
         if sys.platform == "linux":
-            print("  \u2713 Linux")
+            _rprint("  [green]\u2713[/green] Linux")
         else:
-            print(f"  \u2717 Linux — detected {sys.platform}")
+            _rprint(f"  [red]\u2717[/red] Linux — detected {sys.platform}")
             raise RedictumError(
                 f"Linux is required, detected platform: {sys.platform}."
             )
 
     def _check_pulseaudio(self) -> None:
         if shutil.which("paplay"):
-            print("  \u2713 PulseAudio (paplay)")
+            _rprint("  [green]\u2713[/green] PulseAudio (paplay)")
         else:
-            print("  \u2717 PulseAudio (paplay) \u2014 not found")
+            _rprint("  [red]\u2717[/red] PulseAudio (paplay) \u2014 not found")
             raise RedictumError(
                 "PulseAudio (paplay) is required but not found.\n"
                 "Install it manually: sudo apt install pulseaudio-utils"
@@ -211,9 +230,9 @@ class Diagnostics:
 
     def _check_alsa(self) -> None:
         if shutil.which("arecord"):
-            print("  \u2713 ALSA (arecord)")
+            _rprint("  [green]\u2713[/green] ALSA (arecord)")
         else:
-            print("  \u2717 ALSA (arecord) \u2014 not found")
+            _rprint("  [red]\u2717[/red] ALSA (arecord) \u2014 not found")
             raise RedictumError(
                 "ALSA (arecord) is required but not found.\n"
                 "Install it manually: sudo apt install alsa-utils"
@@ -221,9 +240,9 @@ class Diagnostics:
 
     def _check_x11(self) -> None:
         if os.environ.get("DISPLAY"):
-            print("  \u2713 X11 (DISPLAY)")
+            _rprint("  [green]\u2713[/green] X11 (DISPLAY)")
         else:
-            print("  \u2717 X11 (DISPLAY) \u2014 not set")
+            _rprint("  [red]\u2717[/red] X11 (DISPLAY) \u2014 not set")
             raise RedictumError(
                 "X11 display is required but DISPLAY is not set.\n"
                 "Run from an X11 session or set DISPLAY manually."
@@ -241,12 +260,12 @@ class Diagnostics:
 
         # Print summary of missing packages
         if missing_apt:
-            print(f"\nMissing system packages: {', '.join(missing_apt)}")
+            _rprint(f"\nMissing system packages: {', '.join(missing_apt)}")
         if missing_pip:
-            print(f"Missing Python packages: {', '.join(missing_pip)}")
+            _rprint(f"Missing Python packages: {', '.join(missing_pip)}")
 
         if not self._confirm("\nInstall missing dependencies? [y/n]: "):
-            print("Skipping installation. Some features may not work.")
+            _rprint("[yellow]Skipping installation. Some features may not work.[/yellow]")
             return
 
         ok = True
@@ -255,8 +274,8 @@ class Diagnostics:
                 if not self._install_apt(missing_apt):
                     ok = False
             else:
-                print(
-                    "apt not found. Install manually:\n  "
+                _rprint(
+                    "[yellow]apt not found. Install manually:[/yellow]\n  "
                     + " ".join(missing_apt)
                 )
                 ok = False
@@ -265,9 +284,9 @@ class Diagnostics:
                 ok = False
 
         if ok:
-            print("All dependencies installed.")
+            _rprint("[green]All dependencies installed.[/green]")
         else:
-            print("Some dependencies failed to install.")
+            _rprint("[yellow]Some dependencies failed to install.[/yellow]")
 
     def _find_missing_apt(self) -> list[str]:
         """Return list of missing apt package names."""
@@ -278,9 +297,9 @@ class Diagnostics:
             else:
                 found = shutil.which(name) is not None
             if found:
-                print(f"  \u2713 {name}")
+                _rprint(f"  [green]\u2713[/green] {name}")
             else:
-                print(f"  \u2717 {name}")
+                _rprint(f"  [red]\u2717[/red] {name}")
                 missing.append(package)
         return missing
 
@@ -290,23 +309,23 @@ class Diagnostics:
         for package in PIP_PACKAGES:
             try:
                 __import__(package)
-                print(f"  \u2713 {package}")
+                _rprint(f"  [green]\u2713[/green] {package}")
             except ImportError:
-                print(f"  \u2717 {package}")
+                _rprint(f"  [red]\u2717[/red] {package}")
                 missing.append(package)
         return missing
 
     def _install_apt(self, packages: list[str]) -> bool:
         """Run sudo apt install for the given packages. Return success."""
         cmd = ["sudo", "apt", "install", "-y", *packages]
-        print(f"Running: {' '.join(cmd)}")
+        _rprint(f"[dim]Running: {' '.join(cmd)}[/dim]")
         result = subprocess.run(cmd)
         return result.returncode == 0
 
     def _install_pip(self, packages: list[str]) -> bool:
         """Run pip install for the given packages. Return success."""
         cmd = ["pip", "install", *packages]
-        print(f"Running: {' '.join(cmd)}")
+        _rprint(f"[dim]Running: {' '.join(cmd)}[/dim]")
         result = subprocess.run(cmd)
         return result.returncode == 0
 
@@ -343,16 +362,16 @@ class Diagnostics:
         model_path = self._config.get("whisper_model", "")
 
         if not Path(cli_path).exists():
-            print(f"  \u26a0 whisper.cpp not found at {cli_path}")
-            print("    Run: ./redictum install-whisper (iteration 6)")
+            _rprint(f"  [yellow]\u26a0[/yellow] whisper.cpp not found at {cli_path}")
+            _rprint("    Run: ./redictum install-whisper (iteration 6)")
         else:
-            print("  \u2713 whisper.cpp")
+            _rprint("  [green]\u2713[/green] whisper.cpp")
 
         if not Path(model_path).exists():
-            print(f"  \u26a0 whisper model not found at {model_path}")
-            print("    Run: ./redictum install-whisper (iteration 6)")
+            _rprint(f"  [yellow]\u26a0[/yellow] whisper model not found at {model_path}")
+            _rprint("    Run: ./redictum install-whisper (iteration 6)")
         else:
-            print("  \u2713 whisper model")
+            _rprint("  [green]\u2713[/green] whisper model")
 
 
 def setup_logging(log_path: Path) -> None:
@@ -511,10 +530,9 @@ class Daemon:
                 return
             time.sleep(0.1)
 
-        print(
-            f"Warning: daemon (PID {pid}) did not exit within "
-            f"{STOP_TIMEOUT}s after SIGTERM.",
-            file=sys.stderr,
+        _rprint(
+            f"[yellow]Warning: daemon (PID {pid}) did not exit within "
+            f"{STOP_TIMEOUT}s after SIGTERM.[/yellow]"
         )
 
     def status(self) -> int | None:
@@ -753,22 +771,102 @@ class ClipboardManager:
 
 
 class SoundNotifier:
-    """Generate and play WAV feedback tones.
+    """Generate and play WAV feedback tones via paplay."""
 
-    [STUB — iteration 2+]
-    """
+    FREQ_START = 440        # A4 — recording started
+    FREQ_PROCESSING = 660   # E5 — transcription in progress
+    FREQ_DONE = 880         # A5 — pipeline complete
+    FREQ_ERROR = 330        # E4 — error
+
+    DURATION = 0.15         # seconds
+    SAMPLE_RATE = 44100
+
+    def __init__(self, volume: int = 50) -> None:
+        self._volume = max(0, min(100, volume))
+        self._temp_dir = Path(tempfile.mkdtemp(prefix="redictum_"))
+        self._sounds: dict[str, Path] = {}
+        self._generate_all()
+
+    def _generate_all(self) -> None:
+        """Generate all feedback tone WAV files."""
+        self._sounds["start"] = self._generate_wav("start.wav", self.FREQ_START)
+        self._sounds["processing"] = self._generate_wav("processing.wav", self.FREQ_PROCESSING)
+        self._sounds["done"] = self._generate_wav("done.wav", self.FREQ_DONE)
+        self._sounds["error"] = self._generate_wav("error.wav", self.FREQ_ERROR)
+
+    def _generate_wav(self, filename: str, frequency: float) -> Path:
+        """Generate a sine-wave WAV file.
+
+        Args:
+            filename: Output filename.
+            frequency: Tone frequency in Hz.
+
+        Returns:
+            Path to the generated WAV file.
+        """
+        num_samples = int(self.SAMPLE_RATE * self.DURATION)
+        amplitude = 16000
+
+        # Generate PCM samples
+        pcm_data = b""
+        for i in range(num_samples):
+            sample = int(amplitude * math.sin(2 * math.pi * frequency * i / self.SAMPLE_RATE))
+            pcm_data += struct.pack("<h", sample)
+
+        # Build WAV file
+        data_size = len(pcm_data)
+        file_size = 36 + data_size
+        wav_header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF", file_size, b"WAVE",
+            b"fmt ", 16,             # chunk size
+            1,                       # PCM format
+            1,                       # mono
+            self.SAMPLE_RATE,        # sample rate
+            self.SAMPLE_RATE * 2,    # byte rate (sample_rate * channels * bytes_per_sample)
+            2,                       # block align (channels * bytes_per_sample)
+            16,                      # bits per sample
+            b"data", data_size,
+        )
+
+        path = self._temp_dir / filename
+        path.write_bytes(wav_header + pcm_data)
+        return path
+
+    def _play(self, name: str) -> None:
+        """Play a named tone via paplay (non-blocking)."""
+        wav_path = self._sounds.get(name)
+        if wav_path is None or not wav_path.exists():
+            return
+        vol_scaled = int(self._volume / 100 * 65536)
+        try:
+            subprocess.Popen(
+                ["paplay", f"--volume={vol_scaled}", str(wav_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            pass
 
     def play_start(self) -> None:
         """Play the 'recording started' tone."""
-        pass
+        self._play("start")
+
+    def play_processing(self) -> None:
+        """Play the 'transcription in progress' tone."""
+        self._play("processing")
 
     def play_stop(self) -> None:
-        """Play the 'recording stopped' tone."""
-        pass
+        """Play the 'pipeline complete' tone."""
+        self._play("done")
 
     def play_error(self) -> None:
         """Play the 'error occurred' tone."""
-        pass
+        self._play("error")
+
+    def cleanup(self) -> None:
+        """Remove temporary WAV files."""
+        shutil.rmtree(self._temp_dir, ignore_errors=True)
 
 
 class HotkeyListener:
@@ -898,10 +996,7 @@ class HotkeyListener:
 
 
 class Housekeeping:
-    """Rotate old audio files and manage log files.
-
-    [STUB — iteration 2+]
-    """
+    """Rotate old audio files and manage log files."""
 
     def __init__(self, audio_dir: Path, max_files: int) -> None:
         self._audio_dir = audio_dir
@@ -913,15 +1008,29 @@ class Housekeeping:
         Returns:
             Number of files removed.
         """
-        pass
+        wav_files = sorted(
+            self._audio_dir.glob("*.wav"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        excess = len(wav_files) - self._max_files
+        if excess <= 0:
+            return 0
+        removed = 0
+        for path in wav_files[:excess]:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                logging.warning("Failed to remove %s", path)
+        if removed:
+            logging.info("Audio rotation: removed %d old file(s)", removed)
+        return removed
 
     def cleanup_logs(self, logs_dir: Path) -> None:
         """Clean up old log files.
 
-        Args:
-            logs_dir: Path to the logs directory.
+        [Stub — implementation in future iterations.]
         """
-        pass
 
 
 def _log_transcript(transcripts_dir: Path, text: str) -> None:
@@ -982,7 +1091,7 @@ class RedictumApp:
         signal.signal(signal.SIGINT, handle_signal)
         signal.signal(signal.SIGTERM, handle_signal)
 
-        print("Running in interactive mode. Press Ctrl+C to stop.")
+        _rprint("[bold green]Running in interactive mode.[/bold green] Press Ctrl+C to stop.")
         logging.info("Interactive mode started (PID %d)", os.getpid())
         self._main_loop(stop_event)
         logging.info("Interactive mode stopped.")
@@ -996,7 +1105,7 @@ class RedictumApp:
         """
         self._config = self.init()
         daemon = Daemon(self._pid_path, self._log_path)
-        print("Starting daemon...")
+        _rprint("[bold]Starting daemon...[/bold]")
 
         def target() -> None:
             self._main_loop(daemon.stop_event)
@@ -1012,7 +1121,7 @@ class RedictumApp:
         """
         daemon = Daemon(self._pid_path, self._log_path)
         daemon.stop()
-        print("Daemon stopped.")
+        _rprint("[green]Daemon stopped.[/green]")
         return EXIT_OK
 
     def run_status(self) -> int:
@@ -1024,9 +1133,9 @@ class RedictumApp:
         daemon = Daemon(self._pid_path, self._log_path)
         pid = daemon.status()
         if pid is not None:
-            print(f"Daemon is running (PID {pid})")
+            _rprint(f"[green]Daemon is running[/green] (PID {pid})")
         else:
-            print("Daemon is not running.")
+            _rprint("[yellow]Daemon is not running.[/yellow]")
         return EXIT_OK
 
     def _main_loop(self, stop_event: threading.Event) -> None:
@@ -1048,6 +1157,8 @@ class RedictumApp:
             timeout=cfg.get("transcription_timeout", 120),
         )
         clipboard = ClipboardManager()
+        notifier = SoundNotifier(volume=cfg.get("sound_volume", 50)) if cfg.get("sound_feedback", True) else None
+        housekeeper = Housekeeping(audio_dir, cfg["max_audio_files"])
         listener = HotkeyListener(cfg["hotkey"], cfg["hold_delay"])
 
         state = STATE_IDLE
@@ -1060,6 +1171,8 @@ class RedictumApp:
                     return
                 state = STATE_RECORDING
             recorder.start()
+            if notifier:
+                notifier.play_start()
 
         def on_release() -> None:
             nonlocal state
@@ -1072,6 +1185,8 @@ class RedictumApp:
                 nonlocal state
                 try:
                     audio_path = recorder.stop()
+                    if notifier:
+                        notifier.play_processing()
                     if audio_path is None:
                         logging.warning("Recording produced no audio")
                         return
@@ -1110,11 +1225,18 @@ class RedictumApp:
                     else:
                         clipboard.copy(final_text)
 
+                    if notifier:
+                        notifier.play_stop()
+                    housekeeper.rotate_audio()
                     logging.info("Pipeline complete, state -> idle")
                 except RedictumError:
                     logging.exception("Pipeline error")
+                    if notifier:
+                        notifier.play_error()
                 except Exception:
                     logging.exception("Unexpected pipeline error")
+                    if notifier:
+                        notifier.play_error()
                 finally:
                     with state_lock:
                         state = STATE_IDLE
@@ -1129,6 +1251,8 @@ class RedictumApp:
 
         # Graceful shutdown
         listener.stop()
+        if notifier:
+            notifier.cleanup()
         with state_lock:
             current = state
         if current == STATE_RECORDING:

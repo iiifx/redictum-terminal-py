@@ -65,9 +65,9 @@ redictum-terminal-py/
 | `AudioProcessor` | **Working** | Normalize via ffmpeg loudnorm |
 | `Transcriber` | **Working** | Transcribe via whisper-cli |
 | `ClipboardManager` | **Working** | xclip copy + xdotool paste |
-| `SoundNotifier` | Stub | WAV feedback tones |
+| `SoundNotifier` | **Working** | WAV feedback tones via paplay |
 | `HotkeyListener` | **Working** | Push-to-talk via pynput (hold delay) |
-| `Housekeeping` | Stub | Rotate audio, clean logs |
+| `Housekeeping` | **Working** | Rotate audio files, clean logs (stub) |
 
 ## AI Context Files
 | File | Purpose |
