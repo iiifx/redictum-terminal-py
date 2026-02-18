@@ -50,6 +50,7 @@ redictum-terminal-py/
 | `./redictum start` | Start daemon |
 | `./redictum stop` | Stop daemon |
 | `./redictum status` | Show daemon status |
+| `./redictum install-whisper` | Install whisper.cpp and download model |
 | `./redictum --version` | Print version |
 | `./redictum --help` | Show help |
 
@@ -68,6 +69,7 @@ redictum-terminal-py/
 | `SoundNotifier` | **Working** | WAV feedback tones via paplay |
 | `HotkeyListener` | **Working** | Push-to-talk via pynput (hold delay) |
 | `Housekeeping` | **Working** | Rotate audio files, clean logs (stub) |
+| `WhisperInstaller` | **Working** | Clone, build whisper.cpp, download models |
 
 ## AI Context Files
 | File | Purpose |

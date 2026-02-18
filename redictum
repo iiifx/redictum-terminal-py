@@ -131,6 +131,23 @@ class ConfigManager:
         merged.update(user_config)
         return self._expand_paths(merged)
 
+    def update(self, updates: dict[str, Any]) -> None:
+        """Update specific keys in config.json, preserving other values.
+
+        Args:
+            updates: Dictionary of keys to update.
+        """
+        if self._path.exists():
+            raw = self._path.read_text(encoding="utf-8")
+            config: dict[str, Any] = json.loads(raw)
+        else:
+            config = dict(DEFAULT_CONFIG)
+        config.update(updates)
+        self._path.write_text(
+            json.dumps(config, indent=4, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
     # -- private helpers -----------------------------------------------------
 
     def _write_default(self) -> None:
@@ -363,15 +380,227 @@ class Diagnostics:
 
         if not Path(cli_path).exists():
             _rprint(f"  [yellow]\u26a0[/yellow] whisper.cpp not found at {cli_path}")
-            _rprint("    Run: ./redictum install-whisper (iteration 6)")
+            _rprint("    Run: [bold]./redictum install-whisper[/bold]")
         else:
             _rprint("  [green]\u2713[/green] whisper.cpp")
 
         if not Path(model_path).exists():
             _rprint(f"  [yellow]\u26a0[/yellow] whisper model not found at {model_path}")
-            _rprint("    Run: ./redictum install-whisper (iteration 6)")
+            _rprint("    Run: [bold]./redictum install-whisper[/bold]")
         else:
             _rprint("  [green]\u2713[/green] whisper model")
+
+
+class WhisperInstaller:
+    """Install whisper.cpp from source and download a model."""
+
+    REPO_URL = "https://github.com/ggerganov/whisper.cpp.git"
+    HF_BASE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
+
+    MODELS: list[tuple[str, str, str]] = [
+        ("large-v3-turbo-q5_0", "ggml-large-v3-turbo-q5_0.bin", "~547 MB, best speed/quality"),
+        ("large-v3-turbo", "ggml-large-v3-turbo.bin", "~1.6 GB, full turbo"),
+        ("large-v3", "ggml-large-v3.bin", "~3.1 GB, highest quality"),
+        ("medium", "ggml-medium.bin", "~1.5 GB"),
+        ("small", "ggml-small.bin", "~466 MB"),
+        ("base", "ggml-base.bin", "~142 MB"),
+        ("tiny", "ggml-tiny.bin", "~75 MB, fastest"),
+    ]
+
+    def __init__(self, config_mgr: ConfigManager) -> None:
+        self._config_mgr = config_mgr
+        self._install_dir = Path.home() / "whisper.cpp"
+
+    def install(self) -> None:
+        """Run the full whisper.cpp installation flow."""
+        _rprint("\n[bold]whisper.cpp Installer[/bold]")
+
+        cli_path = self._install_dir / "build" / "bin" / "whisper-cli"
+        if cli_path.exists():
+            _rprint(f"  [green]\u2713[/green] whisper-cli already exists at {cli_path}")
+            if not self._confirm("  Rebuild whisper.cpp? [y/n]: "):
+                model_path = self._ensure_model()
+                self._update_config(cli_path, model_path)
+                return
+        else:
+            self._clone()
+
+        use_cuda = self._detect_cuda()
+        self._build(use_cuda)
+
+        cli_path = self._install_dir / "build" / "bin" / "whisper-cli"
+        if not cli_path.exists():
+            raise RedictumError(
+                f"Build completed but whisper-cli not found at {cli_path}"
+            )
+
+        model_path = self._select_and_download()
+        self._update_config(cli_path, model_path)
+        _rprint("\n[green]whisper.cpp installation complete![/green]")
+
+    def _confirm(self, prompt: str) -> bool:
+        """Ask the user y/n."""
+        try:
+            answer = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        return answer in ("y", "yes")
+
+    def _clone(self) -> None:
+        """Clone or update the whisper.cpp repository."""
+        if self._install_dir.exists():
+            _rprint(f"  [yellow]\u26a0[/yellow] {self._install_dir} exists, pulling latest...")
+            result = subprocess.run(
+                ["git", "-C", str(self._install_dir), "pull"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise RedictumError(f"git pull failed: {result.stderr[:200]}")
+            _rprint("  [green]\u2713[/green] Repository updated")
+        else:
+            _rprint(f"  Cloning whisper.cpp to {self._install_dir}...")
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", self.REPO_URL,
+                 str(self._install_dir)],
+            )
+            if result.returncode != 0:
+                raise RedictumError("git clone failed")
+            _rprint("  [green]\u2713[/green] Repository cloned")
+
+    def _detect_cuda(self) -> bool:
+        """Check if CUDA toolkit is available."""
+        if shutil.which("nvcc"):
+            _rprint("  [green]\u2713[/green] CUDA detected, building with GPU support")
+            return True
+        _rprint("  [dim]CUDA not found, building CPU-only[/dim]")
+        return False
+
+    def _build(self, use_cuda: bool) -> None:
+        """Configure and build whisper.cpp."""
+        _rprint("  Configuring build...")
+        cmake_args = [
+            "cmake", "-B", "build",
+            "-DCMAKE_BUILD_TYPE=Release",
+        ]
+        if use_cuda:
+            cmake_args.append("-DGGML_CUDA=ON")
+
+        result = subprocess.run(
+            cmake_args,
+            cwd=str(self._install_dir),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RedictumError(
+                f"cmake configure failed:\n{result.stderr[:500]}"
+            )
+        _rprint("  [green]\u2713[/green] Build configured")
+
+        jobs = os.cpu_count() or 1
+        _rprint(f"  Building whisper.cpp ({jobs} jobs, may take several minutes)...")
+        result = subprocess.run(
+            ["cmake", "--build", "build", "--config", "Release",
+             "-j", str(jobs)],
+            cwd=str(self._install_dir),
+        )
+        if result.returncode != 0:
+            if use_cuda:
+                _rprint("  [yellow]\u26a0[/yellow] CUDA build failed, retrying CPU-only...")
+                shutil.rmtree(self._install_dir / "build", ignore_errors=True)
+                self._build(use_cuda=False)
+                return
+            raise RedictumError("cmake build failed")
+        _rprint("  [green]\u2713[/green] Build complete")
+
+    def _select_and_download(self) -> Path:
+        """Let the user pick a model and download it."""
+        _rprint("\n  [bold]Available models:[/bold]")
+        for i, (name, _filename, desc) in enumerate(self.MODELS, 1):
+            marker = " [bold](recommended)[/bold]" if i == 1 else ""
+            _rprint(f"    {i}. {name} — {desc}{marker}")
+
+        while True:
+            try:
+                choice = input(
+                    f"\n  Select model [1-{len(self.MODELS)}, default=1]: "
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                choice = ""
+            if not choice:
+                choice = "1"
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(self.MODELS):
+                    break
+            except ValueError:
+                pass
+            _rprint(f"  [red]Invalid choice, enter 1-{len(self.MODELS)}[/red]")
+
+        _name, filename, _desc = self.MODELS[idx]
+        return self._download_model(filename)
+
+    def _download_model(self, filename: str) -> Path:
+        """Download a model file from Hugging Face."""
+        models_dir = self._install_dir / "models"
+        models_dir.mkdir(exist_ok=True)
+        model_path = models_dir / filename
+
+        if model_path.exists():
+            _rprint(f"  [green]\u2713[/green] Model already downloaded: {filename}")
+            return model_path
+
+        url = f"{self.HF_BASE}/{filename}"
+        _rprint(f"  Downloading {filename}...")
+
+        # Prefer curl, fall back to wget
+        if shutil.which("curl"):
+            cmd = ["curl", "-L", "-o", str(model_path), "--progress-bar", url]
+        elif shutil.which("wget"):
+            cmd = ["wget", "-O", str(model_path), "--show-progress", "-q", url]
+        else:
+            raise RedictumError(
+                "Neither curl nor wget found. Install one: "
+                "sudo apt install curl"
+            )
+
+        result = subprocess.run(cmd)
+        if result.returncode != 0 or not model_path.exists():
+            # Clean up partial download
+            if model_path.exists():
+                model_path.unlink()
+            raise RedictumError(f"Model download failed: {filename}")
+
+        _rprint(f"  [green]\u2713[/green] Model downloaded: {filename}")
+        return model_path
+
+    def _ensure_model(self) -> Path:
+        """Check if a model exists, offer download if not."""
+        config = self._config_mgr.load()
+        model_path_str = config.get("whisper_model", "")
+        if model_path_str and Path(model_path_str).exists():
+            _rprint(f"  [green]\u2713[/green] Model found: {model_path_str}")
+            return Path(model_path_str)
+        return self._select_and_download()
+
+    def _update_config(self, cli_path: Path, model_path: Path) -> None:
+        """Write whisper paths to config.json."""
+        home = str(Path.home())
+        cli_str = str(cli_path)
+        model_str = str(model_path)
+        # Use ~ for readability in config
+        if cli_str.startswith(home):
+            cli_str = "~" + cli_str[len(home):]
+        if model_str.startswith(home):
+            model_str = "~" + model_str[len(home):]
+        self._config_mgr.update({
+            "whisper_cli": cli_str,
+            "whisper_model": model_str,
+        })
+        _rprint("  [green]\u2713[/green] Config updated with whisper paths")
 
 
 def setup_logging(log_path: Path) -> None:
@@ -1138,6 +1367,18 @@ class RedictumApp:
             _rprint("[yellow]Daemon is not running.[/yellow]")
         return EXIT_OK
 
+    def run_install_whisper(self) -> int:
+        """Install whisper.cpp and download a model.
+
+        Returns:
+            Exit code.
+        """
+        self._config = self._config_mgr.load()
+        self._dir_mgr.ensure()
+        installer = WhisperInstaller(self._config_mgr)
+        installer.install()
+        return EXIT_OK
+
     def _main_loop(self, stop_event: threading.Event) -> None:
         """Main loop: push-to-talk → record → normalize → transcribe → paste."""
         cfg = self._config
@@ -1295,6 +1536,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start", help="Start the daemon")
     sub.add_parser("stop", help="Stop the daemon")
     sub.add_parser("status", help="Show daemon status")
+    sub.add_parser("install-whisper", help="Install whisper.cpp and download a model")
 
     return parser
 
@@ -1320,6 +1562,8 @@ def main() -> int:
             return app.run_stop()
         if args.command == "status":
             return app.run_status()
+        if args.command == "install-whisper":
+            return app.run_install_whisper()
     except RedictumError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_ERROR
