@@ -198,11 +198,12 @@ class Diagnostics:
     Stage 2 — installable dependencies (auto-fix): apt and pip packages.
     Offer to install missing ones, user confirms with y/n.
 
-    whisper.cpp — warning only (auto-install in iteration 6).
+    whisper.cpp — offer auto-install if missing (clone, build, model download).
     """
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], config_mgr: ConfigManager) -> None:
         self._config = config
+        self._config_mgr = config_mgr
 
     # -- Stage 1: critical checks -------------------------------------------
 
@@ -374,21 +375,33 @@ class Diagnostics:
     # -- whisper.cpp: warning only ------------------------------------------
 
     def check_whisper(self) -> None:
-        """Warn if whisper.cpp binary or model is missing."""
+        """Check whisper.cpp and model, offer installation if missing."""
         cli_path = self._config.get("whisper_cli", "")
         model_path = self._config.get("whisper_model", "")
+        cli_ok = bool(cli_path) and Path(cli_path).exists()
+        model_ok = bool(model_path) and Path(model_path).exists()
 
-        if not Path(cli_path).exists():
-            _rprint(f"  [yellow]\u26a0[/yellow] whisper.cpp not found at {cli_path}")
-            _rprint("    Run: [bold]./redictum install-whisper[/bold]")
-        else:
+        if cli_ok:
             _rprint("  [green]\u2713[/green] whisper.cpp")
-
-        if not Path(model_path).exists():
-            _rprint(f"  [yellow]\u26a0[/yellow] whisper model not found at {model_path}")
-            _rprint("    Run: [bold]./redictum install-whisper[/bold]")
         else:
+            _rprint(f"  [yellow]\u26a0[/yellow] whisper.cpp not found at {cli_path}")
+
+        if model_ok:
             _rprint("  [green]\u2713[/green] whisper model")
+        else:
+            _rprint(f"  [yellow]\u26a0[/yellow] whisper model not found at {model_path}")
+
+        if cli_ok and model_ok:
+            return
+
+        if self._confirm("\nInstall whisper.cpp? [y/n]: "):
+            installer = WhisperInstaller(self._config_mgr)
+            installer.install()
+        else:
+            _rprint(
+                "[yellow]Skipping. You can install later with:[/yellow] "
+                "[bold]./redictum install-whisper[/bold]"
+            )
 
 
 class WhisperInstaller:
@@ -1297,7 +1310,7 @@ class RedictumApp:
         """
         config = self._config_mgr.load()
         self._dir_mgr.ensure()
-        diag = Diagnostics(config)
+        diag = Diagnostics(config, self._config_mgr)
         diag.run_stage1()
         diag.run_stage2()
         diag.check_whisper()
