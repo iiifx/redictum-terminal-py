@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -20,6 +21,10 @@ VERSION = "1.0.0-dev"
 
 EXIT_OK = 0
 EXIT_ERROR = 1
+
+STATE_IDLE = "idle"
+STATE_RECORDING = "recording"
+STATE_PROCESSING = "processing"
 
 PID_FILENAME = "redictum.pid"
 LOG_FILENAME = "redictum.log"
@@ -43,12 +48,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "whisper_cli": "~/whisper.cpp/build/bin/whisper-cli",
     "whisper_model": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin",
     "whisper_language": "ru",
+    "whisper_prompt": "",
+    "transcription_timeout": 120,
     "sample_rate": 16000,
     "channels": 1,
+    "arecord_device": "pulse",
     "normalize_audio": True,
-    "hotkey_start": "<ctrl>+<alt>+a",
-    "hotkey_stop": "<ctrl>+<alt>+a",
+    "hotkey": "Insert",
+    "hold_delay": 1.0,
     "auto_paste": True,
+    "text_prefix": "",
+    "text_postfix": "",
     "sound_feedback": True,
     "max_audio_files": 50,
 }
@@ -525,19 +535,36 @@ class Daemon:
 
 
 class AudioRecorder:
-    """Record microphone audio via arecord.
+    """Record microphone audio via arecord."""
 
-    [STUB — iteration 2+]
-    """
-
-    def __init__(self, output_dir: Path, sample_rate: int, channels: int) -> None:
+    def __init__(
+        self, output_dir: Path, sample_rate: int, channels: int, device: str
+    ) -> None:
         self._output_dir = output_dir
         self._sample_rate = sample_rate
         self._channels = channels
+        self._device = device
+        self._process: subprocess.Popen[bytes] | None = None
+        self._current_file: Path | None = None
 
     def start(self) -> None:
-        """Begin recording audio."""
-        pass
+        """Begin recording audio to a timestamped WAV file."""
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._current_file = self._output_dir / f"rec_{ts}.wav"
+        self._process = subprocess.Popen(
+            [
+                "arecord",
+                "-D", self._device,
+                "-f", "S16_LE",
+                "-r", str(self._sample_rate),
+                "-c", str(self._channels),
+                "-t", "wav",
+                str(self._current_file),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        logging.info("Recording started: %s", self._current_file.name)
 
     def stop(self) -> Path | None:
         """Stop recording and return the path to the WAV file.
@@ -545,14 +572,42 @@ class AudioRecorder:
         Returns:
             Path to the recorded WAV file, or None on failure.
         """
-        pass
+        if self._process is None:
+            return None
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait()
+        self._process = None
+
+        path = self._current_file
+        self._current_file = None
+        if path is None or not path.exists() or path.stat().st_size == 0:
+            if path and path.exists():
+                path.unlink()
+            return None
+        logging.info("Recording stopped: %s", path.name)
+        return path
+
+    def cancel(self) -> None:
+        """Terminate recording and delete the file. For graceful shutdown."""
+        if self._process is not None:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                self._process.wait()
+            self._process = None
+        if self._current_file and self._current_file.exists():
+            self._current_file.unlink()
+            self._current_file = None
 
 
 class AudioProcessor:
-    """Normalize audio via ffmpeg.
-
-    [STUB — iteration 2+]
-    """
+    """Normalize audio via ffmpeg."""
 
     def normalize(self, input_path: Path) -> Path:
         """Normalize audio levels of the given file.
@@ -562,20 +617,57 @@ class AudioProcessor:
 
         Returns:
             Path to the normalized audio file.
+
+        Raises:
+            RedictumError: If ffmpeg fails.
         """
-        pass
+        output_path = input_path.with_stem(input_path.stem + "_norm")
+        try:
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-i", str(input_path),
+                    "-af", "loudnorm",
+                    "-ar", "16000",
+                    "-ac", "1",
+                    "-y",
+                    str(output_path),
+                ],
+                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RedictumError("ffmpeg normalization timed out") from exc
+        if result.returncode != 0:
+            raise RedictumError(
+                f"ffmpeg normalization failed (code {result.returncode}): "
+                f"{result.stderr.decode(errors='replace')[:200]}"
+            )
+        logging.info(
+            "Audio normalized: %s -> %s", input_path.name, output_path.name
+        )
+        return output_path
 
 
 class Transcriber:
-    """Transcribe audio via whisper.cpp CLI.
+    """Transcribe audio via whisper.cpp CLI."""
 
-    [STUB — iteration 2+]
-    """
+    BLANK_MARKERS = {"[BLANK_AUDIO]", "[ЗВУК]", "(silence)"}
 
-    def __init__(self, whisper_cli: str, model_path: str, language: str) -> None:
+    def __init__(
+        self,
+        whisper_cli: str,
+        model_path: str,
+        language: str,
+        prompt: str = "",
+        timeout: int = 120,
+    ) -> None:
         self._cli = whisper_cli
         self._model = model_path
         self._language = language
+        self._prompt = prompt
+        self._timeout = timeout
 
     def transcribe(self, audio_path: Path) -> str:
         """Transcribe the given audio file to text.
@@ -584,28 +676,80 @@ class Transcriber:
             audio_path: Path to the audio file.
 
         Returns:
-            Transcribed text string.
+            Transcribed text string (empty if nothing useful detected).
+
+        Raises:
+            RedictumError: If whisper-cli fails or times out.
         """
-        pass
+        cmd = [
+            self._cli,
+            "-m", self._model,
+            "-l", self._language,
+            "-f", str(audio_path),
+            "--no-timestamps",
+            "-np",
+        ]
+        if self._prompt:
+            cmd.extend(["--prompt", self._prompt])
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RedictumError(
+                f"Transcription timed out after {self._timeout}s"
+            ) from exc
+
+        if result.returncode != 0:
+            raise RedictumError(
+                f"whisper-cli failed (code {result.returncode}): "
+                f"{result.stderr[:200]}"
+            )
+
+        text = result.stdout.strip()
+        # Filter blank audio artifacts
+        if not text or text in self.BLANK_MARKERS:
+            return ""
+        return text
 
 
 class ClipboardManager:
-    """Copy text to clipboard and optionally paste via xdotool.
-
-    [STUB — iteration 2+]
-    """
+    """Copy text to clipboard and optionally paste via xdotool."""
 
     def copy(self, text: str) -> None:
-        """Copy text to the system clipboard.
-
-        Args:
-            text: The text to copy.
-        """
-        pass
+        """Copy text to the system clipboard via xclip."""
+        subprocess.run(
+            ["xclip", "-selection", "clipboard"],
+            input=text.encode("utf-8"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     def paste(self) -> None:
         """Simulate Ctrl+V to paste from clipboard."""
-        pass
+        time.sleep(0.05)
+        subprocess.run(
+            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def get_clipboard(self) -> str:
+        """Read current clipboard contents for save/restore."""
+        try:
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-o"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.stdout if result.returncode == 0 else ""
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return ""
 
 
 class SoundNotifier:
@@ -628,27 +772,129 @@ class SoundNotifier:
 
 
 class HotkeyListener:
-    """Listen for global hotkeys via pynput.
+    """Push-to-talk hotkey listener via pynput.
 
-    [STUB — iteration 2+]
+    Hold the key for hold_delay seconds to start recording.
+    Release the key to trigger processing.
     """
 
-    def __init__(self, hotkey_start: str, hotkey_stop: str) -> None:
-        self._hotkey_start = hotkey_start
-        self._hotkey_stop = hotkey_stop
+    # Mapping of config string names to pynput Key attributes
+    _KEY_MAP: dict[str, str] = {
+        "insert": "insert",
+        "delete": "delete",
+        "home": "home",
+        "end": "end",
+        "page_up": "page_up",
+        "page_down": "page_down",
+        "space": "space",
+        "enter": "enter",
+        "tab": "tab",
+        "backspace": "backspace",
+        "pause": "pause",
+        "scroll_lock": "scroll_lock",
+        "print_screen": "print_screen",
+        "caps_lock": "caps_lock",
+        "num_lock": "num_lock",
+        "escape": "esc",
+        "esc": "esc",
+    }
 
-    def start(self, on_start: Any = None, on_stop: Any = None) -> None:
-        """Start listening for hotkeys.
+    def __init__(self, hotkey: str, hold_delay: float) -> None:
+        self._hotkey = hotkey
+        self._hold_delay = hold_delay
+        self._target_key: Any = None  # set in start() after pynput import
+        self._listener: Any = None
+        self._hold_timer: threading.Timer | None = None
+        self._is_holding = False
+        self._on_hold: Callable[[], None] | None = None
+        self._on_release: Callable[[], None] | None = None
+
+    def start(self, on_hold: Callable[[], None], on_release: Callable[[], None]) -> None:
+        """Start listening for the push-to-talk hotkey.
 
         Args:
-            on_start: Callback invoked when the start hotkey is pressed.
-            on_stop: Callback invoked when the stop hotkey is pressed.
+            on_hold: Called when key is held longer than hold_delay.
+            on_release: Called when key is released after hold was triggered.
         """
-        pass
+        from pynput.keyboard import Listener
+
+        self._on_hold = on_hold
+        self._on_release = on_release
+        self._target_key = self._parse_key(self._hotkey)
+        self._listener = Listener(
+            on_press=self._on_press,
+            on_release=self._on_key_release,
+        )
+        self._listener.start()
+        logging.info(
+            "Hotkey listener started: %s (hold %.1fs)",
+            self._hotkey, self._hold_delay,
+        )
 
     def stop(self) -> None:
-        """Stop the hotkey listener."""
-        pass
+        """Stop the hotkey listener and cancel any pending timer."""
+        if self._hold_timer is not None:
+            self._hold_timer.cancel()
+            self._hold_timer = None
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener = None
+
+    def _on_press(self, key: Any) -> None:
+        """Handle key press: start hold timer if target key."""
+        if self._key_matches(key) and not self._is_holding and self._hold_timer is None:
+            self._hold_timer = threading.Timer(self._hold_delay, self._fire_hold)
+            self._hold_timer.daemon = True
+            self._hold_timer.start()
+
+    def _fire_hold(self) -> None:
+        """Called when hold_delay expires — trigger on_hold callback."""
+        self._is_holding = True
+        self._hold_timer = None
+        if self._on_hold:
+            self._on_hold()
+
+    def _on_key_release(self, key: Any) -> None:
+        """Handle key release: cancel timer or trigger on_release."""
+        if not self._key_matches(key):
+            return
+        if self._hold_timer is not None:
+            self._hold_timer.cancel()
+            self._hold_timer = None
+        if self._is_holding:
+            self._is_holding = False
+            if self._on_release:
+                self._on_release()
+
+    def _key_matches(self, key: Any) -> bool:
+        """Check if pressed key matches the target key."""
+        return key == self._target_key
+
+    @classmethod
+    def _parse_key(cls, hotkey: str) -> Any:
+        """Parse a hotkey string into a pynput Key or KeyCode.
+
+        Supports: "Insert", "F1"-"F20", single characters ("a", "b"), etc.
+        """
+        from pynput.keyboard import Key, KeyCode
+
+        normalized = hotkey.strip().lower()
+
+        # Function keys: f1-f20
+        if normalized.startswith("f") and normalized[1:].isdigit():
+            attr = normalized
+            if hasattr(Key, attr):
+                return getattr(Key, attr)
+
+        # Named keys
+        if normalized in cls._KEY_MAP:
+            return getattr(Key, cls._KEY_MAP[normalized])
+
+        # Single character
+        if len(hotkey.strip()) == 1:
+            return KeyCode.from_char(hotkey.strip())
+
+        raise RedictumError(f"Unknown hotkey: '{hotkey}'")
 
 
 class Housekeeping:
@@ -678,6 +924,15 @@ class Housekeeping:
         pass
 
 
+def _log_transcript(transcripts_dir: Path, text: str) -> None:
+    """Append transcript to a daily file transcripts/YYYY-MM-DD.txt."""
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    log_file = transcripts_dir / f"{date_str}.txt"
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {text}\n")
+
+
 # ---------------------------------------------------------------------------
 # RedictumApp — orchestrator
 # ---------------------------------------------------------------------------
@@ -691,6 +946,7 @@ class RedictumApp:
         self._dir_mgr = DirectoryManager(script_dir)
         self._pid_path = script_dir / PID_FILENAME
         self._log_path = script_dir / "logs" / LOG_FILENAME
+        self._config: dict[str, Any] = {}
 
     def init(self) -> dict[str, Any]:
         """Initialize config, directories, and run diagnostics.
@@ -715,7 +971,7 @@ class RedictumApp:
         Returns:
             Exit code.
         """
-        self.init()
+        self._config = self.init()
         setup_logging(self._log_path)
 
         stop_event = threading.Event()
@@ -738,7 +994,7 @@ class RedictumApp:
         Returns:
             Exit code.
         """
-        self.init()
+        self._config = self.init()
         daemon = Daemon(self._pid_path, self._log_path)
         print("Starting daemon...")
 
@@ -774,9 +1030,120 @@ class RedictumApp:
         return EXIT_OK
 
     def _main_loop(self, stop_event: threading.Event) -> None:
-        """Main loop. [STUB — iteration 4: hotkey + recording + transcription]"""
-        while not stop_event.wait(timeout=1.0):
-            pass
+        """Main loop: push-to-talk → record → normalize → transcribe → paste."""
+        cfg = self._config
+        audio_dir = self._script_dir / "audio"
+        transcripts_dir = self._script_dir / "transcripts"
+
+        # Build pipeline components
+        recorder = AudioRecorder(
+            audio_dir, cfg["sample_rate"], cfg["channels"], cfg["arecord_device"],
+        )
+        processor = AudioProcessor()
+        transcriber = Transcriber(
+            cfg["whisper_cli"],
+            cfg["whisper_model"],
+            cfg["whisper_language"],
+            prompt=cfg.get("whisper_prompt", ""),
+            timeout=cfg.get("transcription_timeout", 120),
+        )
+        clipboard = ClipboardManager()
+        listener = HotkeyListener(cfg["hotkey"], cfg["hold_delay"])
+
+        state = STATE_IDLE
+        state_lock = threading.Lock()
+
+        def on_hold() -> None:
+            nonlocal state
+            with state_lock:
+                if state != STATE_IDLE:
+                    return
+                state = STATE_RECORDING
+            recorder.start()
+
+        def on_release() -> None:
+            nonlocal state
+            with state_lock:
+                if state != STATE_RECORDING:
+                    return
+                state = STATE_PROCESSING
+
+            def worker() -> None:
+                nonlocal state
+                try:
+                    audio_path = recorder.stop()
+                    if audio_path is None:
+                        logging.warning("Recording produced no audio")
+                        return
+
+                    # Normalize
+                    if cfg.get("normalize_audio", True):
+                        try:
+                            audio_path = processor.normalize(audio_path)
+                        except RedictumError:
+                            logging.exception("Normalization failed, using raw audio")
+
+                    # Transcribe
+                    text = transcriber.transcribe(audio_path)
+                    if not text:
+                        logging.info("Transcription returned empty text")
+                        return
+
+                    logging.info("Transcribed: %r", text)
+
+                    # Apply prefix/postfix
+                    prefix = cfg.get("text_prefix", "")
+                    postfix = cfg.get("text_postfix", "")
+                    final_text = f"{prefix}{text}{postfix}"
+
+                    # Log transcript
+                    _log_transcript(transcripts_dir, final_text)
+
+                    # Clipboard: save → copy → paste → restore
+                    if cfg.get("auto_paste", True):
+                        saved = clipboard.get_clipboard()
+                        clipboard.copy(final_text)
+                        clipboard.paste()
+                        # Restore previous clipboard after a short delay
+                        time.sleep(0.2)
+                        clipboard.copy(saved)
+                    else:
+                        clipboard.copy(final_text)
+
+                    logging.info("Pipeline complete, state -> idle")
+                except RedictumError:
+                    logging.exception("Pipeline error")
+                except Exception:
+                    logging.exception("Unexpected pipeline error")
+                finally:
+                    with state_lock:
+                        state = STATE_IDLE
+
+            thread = threading.Thread(target=worker, daemon=True)
+            thread.start()
+
+        listener.start(on_hold, on_release)
+
+        # Wait for shutdown signal
+        stop_event.wait()
+
+        # Graceful shutdown
+        listener.stop()
+        with state_lock:
+            current = state
+        if current == STATE_RECORDING:
+            recorder.cancel()
+            logging.info("Cancelled recording during shutdown")
+        elif current == STATE_PROCESSING:
+            logging.info("Waiting for processing to finish...")
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                with state_lock:
+                    if state == STATE_IDLE:
+                        break
+                time.sleep(0.5)
+
+        logging.info("Main loop stopped")
 
 
 # ---------------------------------------------------------------------------

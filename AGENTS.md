@@ -61,12 +61,12 @@ redictum-terminal-py/
 | `RedictumApp` | **Working** | Orchestrator, wires components |
 | `Diagnostics` | **Working** | Check external dependencies, auto-install |
 | `Daemon` | **Working** | PID file, double-fork daemon, signal handling |
-| `AudioRecorder` | Stub | Record via arecord |
-| `AudioProcessor` | Stub | Normalize via ffmpeg |
-| `Transcriber` | Stub | Transcribe via whisper.cpp |
-| `ClipboardManager` | Stub | xclip/xdotool paste |
+| `AudioRecorder` | **Working** | Record via arecord (start/stop/cancel) |
+| `AudioProcessor` | **Working** | Normalize via ffmpeg loudnorm |
+| `Transcriber` | **Working** | Transcribe via whisper-cli |
+| `ClipboardManager` | **Working** | xclip copy + xdotool paste |
 | `SoundNotifier` | Stub | WAV feedback tones |
-| `HotkeyListener` | Stub | pynput global hotkeys |
+| `HotkeyListener` | **Working** | Push-to-talk via pynput (hold delay) |
 | `Housekeeping` | Stub | Rotate audio, clean logs |
 
 ## AI Context Files
