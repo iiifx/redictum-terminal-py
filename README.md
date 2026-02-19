@@ -6,6 +6,15 @@ Voice-to-text CLI for Linux. Hold a key, speak, release — transcribed text is 
 
 Uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for local speech recognition. No cloud APIs, everything runs on your machine.
 
+## How it works
+
+1. Hold `Insert` for 0.6s — recording starts (triple beep)
+2. Speak into microphone
+3. Release `Insert` — audio is normalized and sent to whisper.cpp
+4. Transcribed text is copied to clipboard and auto-pasted
+
+For **translate mode**, use `Ctrl+Insert` instead — speech is transcribed and translated to English.
+
 ## Installation
 
 ```bash
@@ -63,15 +72,6 @@ On first run, the script will:
 # Whisper setup
 ./redictum whisper     # install/reconfigure whisper.cpp
 ```
-
-### How it works
-
-1. Hold `Insert` for 0.6s — recording starts (triple beep)
-2. Speak into microphone
-3. Release `Insert` — audio is normalized and sent to whisper.cpp
-4. Transcribed text is copied to clipboard and auto-pasted
-
-For **translate mode**, use `Ctrl+Insert` instead — speech is transcribed and translated to English.
 
 ## License
 
