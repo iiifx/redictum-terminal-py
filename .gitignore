@@ -17,3 +17,4 @@ config.yaml
 audio/
 transcripts/
 logs/
+.initialized

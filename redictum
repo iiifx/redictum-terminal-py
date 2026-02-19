@@ -37,6 +37,7 @@ STATE_PROCESSING = "processing"
 
 PID_FILENAME = "redictum.pid"
 LOG_FILENAME = "redictum.log"
+INITIALIZED_FILENAME = ".initialized"
 STOP_TIMEOUT = 3.0
 
 PATH_KEYS: tuple[tuple[str, ...], ...] = (
@@ -1828,7 +1829,18 @@ class RedictumApp:
         self._dir_mgr = DirectoryManager(script_dir)
         self._pid_path = script_dir / PID_FILENAME
         self._log_path = script_dir / "logs" / LOG_FILENAME
+        self._init_marker = script_dir / INITIALIZED_FILENAME
         self._config: dict[str, Any] = {}
+
+    def _is_initialized(self) -> bool:
+        """Check if the first-run marker file exists."""
+        return self._init_marker.exists()
+
+    def _mark_initialized(self) -> None:
+        """Create the first-run marker file."""
+        self._init_marker.write_text(
+            f"initialized {datetime.now().isoformat()}\n"
+        )
 
     def init(self) -> dict[str, Any]:
         """Initialize config, directories, and run diagnostics.
@@ -1845,7 +1857,89 @@ class RedictumApp:
         diag.run_stage1()
         diag.run_stage2()
         diag.check_whisper()
+        self._mark_initialized()
         return config
+
+    def init_quick(self) -> dict[str, Any]:
+        """Load config and ensure directories without running diagnostics.
+
+        Returns:
+            Loaded configuration dictionary.
+        """
+        config = self._config_mgr.load()
+        self._dir_mgr.ensure()
+        return config
+
+    def _deps_ok(self, config: dict[str, Any]) -> bool:
+        """Silently check that all critical dependencies are present."""
+        # Stage 1: critical environment
+        if sys.version_info < (3, 10):
+            return False
+        if sys.platform != "linux":
+            return False
+        if not shutil.which("paplay"):
+            return False
+        if not shutil.which("arecord"):
+            return False
+        if not os.environ.get("DISPLAY"):
+            return False
+        # Stage 2: apt packages
+        for name, package in APT_PACKAGES.items():
+            if name == "build-essential":
+                try:
+                    r = subprocess.run(
+                        ["dpkg", "-s", package],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    if r.returncode != 0:
+                        return False
+                except FileNotFoundError:
+                    return False
+            elif not shutil.which(name):
+                return False
+        # Stage 2: pip packages
+        for import_name in PIP_PACKAGES:
+            try:
+                __import__(import_name)
+            except ImportError:
+                return False
+        # whisper.cpp
+        whisper = config.get("dependency", {}).get("whisper", {})
+        cli_path = whisper.get("cli", "")
+        model_path = whisper.get("model", "")
+        if not cli_path or not Path(cli_path).exists():
+            return False
+        if not model_path or not Path(model_path).exists():
+            return False
+        return True
+
+    def _print_banner(self, ready: bool = False) -> None:
+        """Print compact startup banner with hotkeys and language info."""
+        if ready:
+            _rprint("[bold green]Redictum Terminal — ready![/bold green]")
+        else:
+            _rprint("[bold]Redictum Terminal[/bold]")
+
+        # Resolve hotkey names from config
+        hotkey_cfg = self._config.get("input", {}).get("hotkey", {})
+        key = hotkey_cfg.get("key", "Insert")
+        translate_key = hotkey_cfg.get("translate_key", "")
+        parts = [f"{key} (transcribe)"]
+        if translate_key:
+            parts.append(f"{translate_key} (translate)")
+        _rprint(f"Listening: {', '.join(parts)}")
+
+        # Resolve language
+        whisper_cfg = self._config.get("dependency", {}).get("whisper", {})
+        language = whisper_cfg.get("language", "auto")
+        if language == "auto":
+            detected = _detect_language()
+            _rprint(f"Language: {detected} (auto)")
+        else:
+            _rprint(f"Language: {language}")
+
+        _rprint("\nPress Ctrl+C to stop.")
 
     def run_interactive(self) -> int:
         """Run in interactive (foreground) mode.
@@ -1853,7 +1947,17 @@ class RedictumApp:
         Returns:
             Exit code.
         """
-        self._config = self.init()
+        if self._is_initialized():
+            self._config = self.init_quick()
+            if self._deps_ok(self._config):
+                ready = False
+            else:
+                self._config = self.init()
+                ready = True
+        else:
+            self._config = self.init()
+            ready = True
+
         setup_logging(self._log_path)
 
         stop_event = threading.Event()
@@ -1864,7 +1968,7 @@ class RedictumApp:
         signal.signal(signal.SIGINT, handle_signal)
         signal.signal(signal.SIGTERM, handle_signal)
 
-        _rprint("[bold green]Running in interactive mode.[/bold green] Press Ctrl+C to stop.")
+        self._print_banner(ready=ready)
         logging.info("Interactive mode started (PID %d)", os.getpid())
         self._main_loop(stop_event)
         logging.info("Interactive mode stopped.")
@@ -1876,9 +1980,15 @@ class RedictumApp:
         Returns:
             Exit code.
         """
-        self._config = self.init()
+        if self._is_initialized():
+            self._config = self.init_quick()
+            if not self._deps_ok(self._config):
+                self._config = self.init()
+        else:
+            self._config = self.init()
+
         daemon = Daemon(self._pid_path, self._log_path)
-        _rprint("[bold]Starting daemon...[/bold]")
+        _rprint("[bold]Redictum Terminal — daemon started.[/bold]")
 
         def target() -> None:
             self._main_loop(daemon.stop_event)
@@ -2103,7 +2213,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Recreate config.yaml with default values",
     )
-
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("start", help="Start the daemon")
@@ -2130,6 +2239,9 @@ def main() -> int:
         config_path = script_dir / "config.yaml"
         if config_path.exists():
             config_path.unlink()
+        init_marker = script_dir / INITIALIZED_FILENAME
+        if init_marker.exists():
+            init_marker.unlink()
 
     try:
         if args.command is None:
