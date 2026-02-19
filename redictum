@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import argparse
 import atexit
-import json
 import logging
 import math
 import os
+import re
 import signal
 import shutil
 import struct
@@ -39,8 +39,14 @@ PID_FILENAME = "redictum.pid"
 LOG_FILENAME = "redictum.log"
 STOP_TIMEOUT = 3.0
 
-PATH_KEYS = ("whisper_cli", "whisper_model")
+PATH_KEYS: tuple[tuple[str, ...], ...] = (
+    ("dependency", "whisper", "cli"),
+    ("dependency", "whisper", "model"),
+)
 REQUIRED_DIRS = ("audio", "transcripts", "logs")
+
+AUDIO_SAMPLE_RATE = 16000
+AUDIO_CHANNELS = 1
 
 APT_PACKAGES: dict[str, str] = {
     "ffmpeg": "ffmpeg",
@@ -51,27 +57,148 @@ APT_PACKAGES: dict[str, str] = {
     "git": "git",
 }
 
-PIP_PACKAGES: tuple[str, ...] = ("pynput", "rich")
+PIP_PACKAGES: dict[str, str] = {
+    "pynput": "pynput",
+    "rich": "rich",
+    "yaml": "PyYAML",
+}
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "whisper_cli": "~/whisper.cpp/build/bin/whisper-cli",
-    "whisper_model": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin",
-    "whisper_language": "ru",
-    "whisper_prompt": "",
-    "transcription_timeout": 120,
-    "sample_rate": 16000,
-    "channels": 1,
-    "arecord_device": "pulse",
-    "normalize_audio": True,
-    "hotkey": "Insert",
-    "hold_delay": 1.0,
-    "auto_paste": True,
-    "text_prefix": "",
-    "text_postfix": "",
-    "sound_feedback": True,
-    "sound_volume": 50,
-    "max_audio_files": 50,
+    "dependency": {
+        "whisper": {
+            "cli": "~/whisper.cpp/build/bin/whisper-cli",
+            "model": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin",
+            "language": "ru",
+            "prompt": "Грамотная разговорная речь на русском языке. Правильная расстановка знаков препинания: запятые, точки, вопросительные и восклицательные знаки. Используются англицизмы, технические термины и сокращения.",
+            "timeout": 120,
+        },
+    },
+    "audio": {
+        "recording": {
+            "device": "pulse",
+            "normalize": True,
+        },
+    },
+    "input": {
+        "hotkey": {
+            "key": "Insert",
+            "hold_delay": 0.6,
+        },
+    },
+    "clipboard": {
+        "paste": {
+            "auto": True,
+            "prefix": "",
+            "postfix": " ",
+        },
+    },
+    "notification": {
+        "sound": {
+            "signal_volume": 30,
+            "signal_start": True,
+            "signal_processing": False,
+            "signal_done": True,
+            "signal_error": True,
+        },
+    },
+    "storage": {
+        "audio": {
+            "max_files": 50,
+        },
+        "transcripts": {
+            "max_files": 50,
+        },
+    },
 }
+
+DEFAULT_CONFIG_YAML: str = """\
+# =============================================================================
+# Redictum Terminal — Configuration
+# =============================================================================
+
+# --- External Dependencies ---------------------------------------------------
+
+dependency:
+  whisper:
+    # Path to whisper-cli binary
+    cli: "~/whisper.cpp/build/bin/whisper-cli"
+
+    # Path to whisper model file
+    model: "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin"
+
+    # Language for transcription (e.g., "ru", "en", "de", "fr")
+    language: "ru"
+
+    # Optional prompt to guide whisper transcription
+    # Helps with domain-specific vocabulary and punctuation
+    prompt: "Грамотная разговорная речь на русском языке. Правильная расстановка знаков препинания: запятые, точки, вопросительные и восклицательные знаки. Используются англицизмы, технические термины и сокращения."
+
+    # Maximum time (seconds) to wait for transcription to finish
+    timeout: 120
+
+# --- Audio Recording ---------------------------------------------------------
+
+audio:
+  recording:
+    # ALSA recording device ("pulse" for PulseAudio)
+    device: "pulse"
+
+    # Normalize audio via ffmpeg loudnorm before transcription
+    normalize: true
+
+# --- Input -------------------------------------------------------------------
+
+input:
+  hotkey:
+    # Push-to-talk key name (e.g., "Insert", "F12", "Pause", "scroll_lock")
+    key: "Insert"
+
+    # How long (seconds) to hold the key before recording starts
+    hold_delay: 0.6
+
+# --- Clipboard ---------------------------------------------------------------
+
+clipboard:
+  paste:
+    # Auto-paste transcribed text via xdotool (Ctrl+V)
+    auto: true
+
+    # Text added before transcription result
+    prefix: ""
+
+    # Text added after transcription result
+    postfix: " "
+
+# --- Notifications -----------------------------------------------------------
+
+notification:
+  sound:
+    # Sound volume (0-100, mapped to PulseAudio range)
+    signal_volume: 30
+
+    # Sound when recording starts
+    signal_start: true
+
+    # Sound when transcription begins
+    signal_processing: false
+
+    # Sound when transcription is done
+    signal_done: true
+
+    # Sound on error
+    signal_error: true
+
+# --- Storage -----------------------------------------------------------------
+
+storage:
+  audio:
+    # Maximum number of audio files to keep (oldest are deleted)
+    max_files: 50
+
+  transcripts:
+    # Maximum number of daily transcript files to keep (oldest are deleted)
+    max_files: 50
+"""
 
 
 class RedictumError(Exception):
@@ -83,7 +210,6 @@ def _rprint(text: str) -> None:
     if _console is not None:
         _console.print(text)
     else:
-        import re
         print(re.sub(r"\[/?[^\]]*\]", "", text))
 
 
@@ -92,14 +218,15 @@ def _rprint(text: str) -> None:
 # ---------------------------------------------------------------------------
 
 class ConfigManager:
-    """Manages config.json: generation, loading, merging with defaults.
+    """Manages config.yaml: generation, loading, merging with defaults.
 
     Config file lives next to the script. Missing keys are filled from
     DEFAULT_CONFIG; extra keys in the user file are preserved.
+    Comments in YAML are preserved across updates.
     """
 
     def __init__(self, script_dir: Path) -> None:
-        self._path = script_dir / "config.json"
+        self._path = script_dir / "config.yaml"
 
     @property
     def path(self) -> Path:
@@ -110,64 +237,101 @@ class ConfigManager:
         """Load config from disk or generate a default one.
 
         Returns:
-            Merged configuration dictionary.
+            Merged configuration dictionary (nested).
 
         Raises:
-            RedictumError: If config.json exists but contains invalid JSON.
+            RedictumError: If config.yaml exists but contains invalid YAML.
         """
+        import yaml  # late import: available after diagnostics installs PyYAML
+
         if not self._path.exists():
             self._write_default()
-            return self._expand_paths(dict(DEFAULT_CONFIG))
+            return self._expand_paths(self._deep_copy(DEFAULT_CONFIG))
 
         try:
             raw = self._path.read_text(encoding="utf-8")
-            user_config: dict[str, Any] = json.loads(raw)
-        except json.JSONDecodeError as exc:
+            user_config = yaml.safe_load(raw)
+        except yaml.YAMLError as exc:
             raise RedictumError(
-                f"Invalid JSON in {self._path}: {exc}"
+                f"Invalid YAML in {self._path}: {exc}"
             ) from exc
 
-        merged = dict(DEFAULT_CONFIG)
-        merged.update(user_config)
+        if not isinstance(user_config, dict):
+            user_config = {}
+
+        merged = self._deep_copy(DEFAULT_CONFIG)
+        self._deep_merge(merged, user_config)
         return self._expand_paths(merged)
 
-    def update(self, updates: dict[str, Any]) -> None:
-        """Update specific keys in config.json, preserving other values.
+    def update(self, updates: dict[str, str]) -> None:
+        """Update leaf keys in config.yaml, preserving comments.
+
+        Performs line-by-line value replacement so that the YAML template
+        structure and comments remain intact.  Leaf key names must be
+        unique across the entire config.
 
         Args:
-            updates: Dictionary of keys to update.
+            updates: ``{leaf_key: value}`` pairs, e.g. ``{"cli": "/path"}``.
         """
         if self._path.exists():
-            raw = self._path.read_text(encoding="utf-8")
-            try:
-                config: dict[str, Any] = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                raise RedictumError(
-                    f"Invalid JSON in {self._path}: {exc}"
-                ) from exc
+            text = self._path.read_text(encoding="utf-8")
         else:
-            config = dict(DEFAULT_CONFIG)
-        config.update(updates)
-        self._path.write_text(
-            json.dumps(config, indent=4, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+            text = DEFAULT_CONFIG_YAML
+
+        for key, value in updates.items():
+            yaml_val = self._format_value(value)
+            text = re.sub(
+                rf"^(\s*{re.escape(key)}:)\s+.*$",
+                rf"\1 {yaml_val}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+
+        self._path.write_text(text, encoding="utf-8")
 
     # -- private helpers -----------------------------------------------------
 
     def _write_default(self) -> None:
-        """Write DEFAULT_CONFIG to config.json with pretty formatting."""
-        self._path.write_text(
-            json.dumps(DEFAULT_CONFIG, indent=4, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        """Write DEFAULT_CONFIG_YAML template with comments."""
+        self._path.write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")
+
+    @staticmethod
+    def _format_value(value: Any) -> str:
+        """Format a Python value for YAML output."""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, str):
+            return f'"{value}"'
+        return str(value)
+
+    @staticmethod
+    def _deep_copy(d: dict[str, Any]) -> dict[str, Any]:
+        """Return a deep copy of a nested dict (no import needed)."""
+        out: dict[str, Any] = {}
+        for k, v in d.items():
+            out[k] = ConfigManager._deep_copy(v) if isinstance(v, dict) else v
+        return out
+
+    @staticmethod
+    def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> None:
+        """Recursively merge *override* into *base* in place."""
+        for k, v in override.items():
+            if k in base and isinstance(base[k], dict) and isinstance(v, dict):
+                ConfigManager._deep_merge(base[k], v)
+            else:
+                base[k] = v
 
     @staticmethod
     def _expand_paths(config: dict[str, Any]) -> dict[str, Any]:
-        """Expand ``~`` in path-valued keys."""
-        for key in PATH_KEYS:
-            if key in config and isinstance(config[key], str):
-                config[key] = str(Path(config[key]).expanduser())
+        """Expand ``~`` in path-valued keys (nested paths)."""
+        for path_keys in PATH_KEYS:
+            node: Any = config
+            for part in path_keys[:-1]:
+                node = node.get(part, {})
+            leaf = path_keys[-1]
+            if leaf in node and isinstance(node[leaf], str):
+                node[leaf] = str(Path(node[leaf]).expanduser())
         return config
 
 
@@ -329,13 +493,13 @@ class Diagnostics:
     def _find_missing_pip(self) -> list[str]:
         """Return list of missing pip package names."""
         missing: list[str] = []
-        for package in PIP_PACKAGES:
+        for import_name, pip_name in PIP_PACKAGES.items():
             try:
-                __import__(package)
-                _rprint(f"  [green]\u2713[/green] {package}")
+                __import__(import_name)
+                _rprint(f"  [green]\u2713[/green] {pip_name}")
             except ImportError:
-                _rprint(f"  [red]\u2717[/red] {package}")
-                missing.append(package)
+                _rprint(f"  [red]\u2717[/red] {pip_name}")
+                missing.append(pip_name)
         return missing
 
     def _install_apt(self, packages: list[str]) -> bool:
@@ -381,8 +545,9 @@ class Diagnostics:
 
     def check_whisper(self) -> None:
         """Check whisper.cpp and model, offer installation if missing."""
-        cli_path = self._config.get("whisper_cli", "")
-        model_path = self._config.get("whisper_model", "")
+        whisper = self._config.get("dependency", {}).get("whisper", {})
+        cli_path = whisper.get("cli", "")
+        model_path = whisper.get("model", "")
         cli_ok = bool(cli_path) and Path(cli_path).exists()
         model_ok = bool(model_path) and Path(model_path).exists()
 
@@ -525,7 +690,6 @@ class WhisperInstaller:
                 capture_output=True, text=True, timeout=10,
             )
             # Parse "release 12.8, V12.8.61"
-            import re
             m = re.search(r"release (\d+)\.", result.stdout)
             return int(m.group(1)) if m else None
         except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -573,7 +737,6 @@ class WhisperInstaller:
         except FileNotFoundError:
             return None
         # Mint, Pop!_OS etc. have UBUNTU_CODENAME
-        import re
         m = re.search(r'UBUNTU_CODENAME=(\w+)', text)
         if not m:
             m = re.search(r'VERSION_CODENAME=(\w+)', text)
@@ -799,7 +962,7 @@ class WhisperInstaller:
     def _ensure_model(self) -> Path:
         """Check if a model exists, offer download if not."""
         config = self._config_mgr.load()
-        model_path_str = config.get("whisper_model", "")
+        model_path_str = config.get("dependency", {}).get("whisper", {}).get("model", "")
         if model_path_str and Path(model_path_str).exists():
             _rprint(f"  [green]\u2713[/green] Model: {Path(model_path_str).name}")
             return Path(model_path_str)
@@ -808,7 +971,7 @@ class WhisperInstaller:
     # -- Config --------------------------------------------------------------
 
     def _update_config(self, cli_path: Path, model_path: Path) -> None:
-        """Write whisper paths to config.json."""
+        """Write whisper paths to config.yaml."""
         home = str(Path.home())
         cli_str = str(cli_path)
         model_str = str(model_path)
@@ -817,8 +980,8 @@ class WhisperInstaller:
         if model_str.startswith(home):
             model_str = "~" + model_str[len(home):]
         self._config_mgr.update({
-            "whisper_cli": cli_str,
-            "whisper_model": model_str,
+            "cli": cli_str,
+            "model": model_str,
         })
         _rprint("  [green]\u2713[/green] Config updated")
 
@@ -1004,12 +1167,8 @@ class Daemon:
 class AudioRecorder:
     """Record microphone audio via arecord."""
 
-    def __init__(
-        self, output_dir: Path, sample_rate: int, channels: int, device: str
-    ) -> None:
+    def __init__(self, output_dir: Path, device: str) -> None:
         self._output_dir = output_dir
-        self._sample_rate = sample_rate
-        self._channels = channels
         self._device = device
         self._process: subprocess.Popen[bytes] | None = None
         self._current_file: Path | None = None
@@ -1023,8 +1182,8 @@ class AudioRecorder:
                 "arecord",
                 "-D", self._device,
                 "-f", "S16_LE",
-                "-r", str(self._sample_rate),
-                "-c", str(self._channels),
+                "-r", str(AUDIO_SAMPLE_RATE),
+                "-c", str(AUDIO_CHANNELS),
                 "-t", "wav",
                 str(self._current_file),
             ],
@@ -1095,8 +1254,8 @@ class AudioProcessor:
                     "ffmpeg",
                     "-i", str(input_path),
                     "-af", "loudnorm",
-                    "-ar", "16000",
-                    "-ac", "1",
+                    "-ar", str(AUDIO_SAMPLE_RATE),
+                    "-ac", str(AUDIO_CHANNELS),
                     "-y",
                     str(output_path),
                 ],
@@ -1220,82 +1379,19 @@ class ClipboardManager:
 
 
 class SoundNotifier:
-    """Generate and play WAV feedback tones via paplay."""
+    """Play WAV feedback tones via paplay.
 
-    FREQ_START = 440        # A4 — recording started
-    FREQ_PROCESSING = 660   # E5 — transcription in progress
-    FREQ_DONE = 880         # A5 — pipeline complete
-    FREQ_ERROR = 330        # E4 — error
+    Tones are procedurally generated at init time and cached as
+    temporary WAV files. See ``_generate_tones()`` at the bottom
+    of this module for the synthesis code.
+    """
 
-    DURATION = 0.15         # seconds
-    SAMPLE_RATE = 44100
-
-    def __init__(self, volume: int = 50) -> None:
+    def __init__(self, volume: int = 30) -> None:
         self._volume = max(0, min(100, volume))
         self._temp_dir = Path(tempfile.mkdtemp(prefix="redictum_"))
         self._sounds: dict[str, Path] = {}
-        self._generate_all()
-
-    def _generate_all(self) -> None:
-        """Generate all feedback tone WAV files."""
-        self._sounds["start"] = self._generate_wav("start.wav", self.FREQ_START)
-        self._sounds["processing"] = self._generate_wav("processing.wav", self.FREQ_PROCESSING)
-        self._sounds["done"] = self._generate_wav("done.wav", self.FREQ_DONE)
-        self._sounds["error"] = self._generate_wav("error.wav", self.FREQ_ERROR)
-
-    def _generate_wav(self, filename: str, frequency: float) -> Path:
-        """Generate a sine-wave WAV file.
-
-        Args:
-            filename: Output filename.
-            frequency: Tone frequency in Hz.
-
-        Returns:
-            Path to the generated WAV file.
-        """
-        num_samples = int(self.SAMPLE_RATE * self.DURATION)
-        amplitude = 16000
-
-        # Generate PCM samples
-        pcm_data = b""
-        for i in range(num_samples):
-            sample = int(amplitude * math.sin(2 * math.pi * frequency * i / self.SAMPLE_RATE))
-            pcm_data += struct.pack("<h", sample)
-
-        # Build WAV file
-        data_size = len(pcm_data)
-        file_size = 36 + data_size
-        wav_header = struct.pack(
-            "<4sI4s4sIHHIIHH4sI",
-            b"RIFF", file_size, b"WAVE",
-            b"fmt ", 16,             # chunk size
-            1,                       # PCM format
-            1,                       # mono
-            self.SAMPLE_RATE,        # sample rate
-            self.SAMPLE_RATE * 2,    # byte rate (sample_rate * channels * bytes_per_sample)
-            2,                       # block align (channels * bytes_per_sample)
-            16,                      # bits per sample
-            b"data", data_size,
-        )
-
-        path = self._temp_dir / filename
-        path.write_bytes(wav_header + pcm_data)
-        return path
-
-    def _play(self, name: str) -> None:
-        """Play a named tone via paplay (non-blocking)."""
-        wav_path = self._sounds.get(name)
-        if wav_path is None or not wav_path.exists():
-            return
-        vol_scaled = int(self._volume / 100 * 65536)
-        try:
-            subprocess.Popen(
-                ["paplay", f"--volume={vol_scaled}", str(wav_path)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except FileNotFoundError:
-            pass
+        for name, samples in _generate_tones().items():
+            self._sounds[name] = self._write_wav(f"{name}.wav", samples)
 
     def play_start(self) -> None:
         """Play the 'recording started' tone."""
@@ -1316,6 +1412,39 @@ class SoundNotifier:
     def cleanup(self) -> None:
         """Remove temporary WAV files."""
         shutil.rmtree(self._temp_dir, ignore_errors=True)
+
+    # -- internals -----------------------------------------------------------
+
+    def _play(self, name: str) -> None:
+        wav_path = self._sounds.get(name)
+        if wav_path is None or not wav_path.exists():
+            return
+        vol_scaled = int(self._volume / 100 * 65536)
+        try:
+            subprocess.Popen(
+                ["paplay", f"--volume={vol_scaled}", str(wav_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            pass
+
+    def _write_wav(self, filename: str, samples: list[float]) -> Path:
+        peak = max(abs(s) for s in samples) or 1.0
+        pcm = b"".join(
+            struct.pack("<h", max(-32767, min(32767, int(s / peak * 30000))))
+            for s in samples
+        )
+        n = len(pcm)
+        header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF", 36 + n, b"WAVE",
+            b"fmt ", 16, 1, 1, 44100, 88200, 2, 16,
+            b"data", n,
+        )
+        path = self._temp_dir / filename
+        path.write_bytes(header + pcm)
+        return path
 
 
 class HotkeyListener:
@@ -1445,11 +1574,18 @@ class HotkeyListener:
 
 
 class Housekeeping:
-    """Rotate old audio files and manage log files."""
+    """Rotate old audio and transcript files."""
 
-    def __init__(self, audio_dir: Path, max_files: int) -> None:
+    def __init__(
+        self,
+        audio_dir: Path,
+        transcripts_dir: Path,
+        storage_cfg: dict[str, Any],
+    ) -> None:
         self._audio_dir = audio_dir
-        self._max_files = max_files
+        self._transcripts_dir = transcripts_dir
+        self._audio_max = storage_cfg.get("audio", {}).get("max_files", 50)
+        self._transcripts_max = storage_cfg.get("transcripts", {}).get("max_files", 50)
 
     def rotate_audio(self) -> int:
         """Remove oldest audio files exceeding the limit.
@@ -1462,25 +1598,36 @@ class Housekeeping:
              if not p.stem.endswith("_norm")),
             key=lambda p: p.stat().st_mtime,
         )
-        excess = len(wav_files) - self._max_files
+        return self._rotate(wav_files, self._audio_max, "Audio")
+
+    def rotate_transcripts(self) -> int:
+        """Remove oldest daily transcript files exceeding the limit.
+
+        Returns:
+            Number of files removed.
+        """
+        txt_files = sorted(
+            self._transcripts_dir.glob("*.txt"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        return self._rotate(txt_files, self._transcripts_max, "Transcript")
+
+    @staticmethod
+    def _rotate(files: list[Path], max_files: int, label: str) -> int:
+        """Remove oldest files exceeding *max_files*."""
+        excess = len(files) - max_files
         if excess <= 0:
             return 0
         removed = 0
-        for path in wav_files[:excess]:
+        for path in files[:excess]:
             try:
                 path.unlink()
                 removed += 1
             except OSError:
                 logging.warning("Failed to remove %s", path)
         if removed:
-            logging.info("Audio rotation: removed %d old file(s)", removed)
+            logging.info("%s rotation: removed %d old file(s)", label, removed)
         return removed
-
-    def cleanup_logs(self, logs_dir: Path) -> None:
-        """Clean up old log files.
-
-        [Stub — implementation in future iterations.]
-        """
 
 
 def _log_transcript(transcripts_dir: Path, text: str) -> None:
@@ -1606,22 +1753,28 @@ class RedictumApp:
         audio_dir = self._script_dir / "audio"
         transcripts_dir = self._script_dir / "transcripts"
 
+        # Unpack nested config sections
+        whisper = cfg["dependency"]["whisper"]
+        audio = cfg["audio"]["recording"]
+        hotkey = cfg["input"]["hotkey"]
+        clip_cfg = cfg["clipboard"]["paste"]
+        sound_cfg = cfg["notification"]["sound"]
+        storage = cfg["storage"]
+
         # Build pipeline components
-        recorder = AudioRecorder(
-            audio_dir, cfg["sample_rate"], cfg["channels"], cfg["arecord_device"],
-        )
+        recorder = AudioRecorder(audio_dir, audio["device"])
         processor = AudioProcessor()
         transcriber = Transcriber(
-            cfg["whisper_cli"],
-            cfg["whisper_model"],
-            cfg["whisper_language"],
-            prompt=cfg.get("whisper_prompt", ""),
-            timeout=cfg.get("transcription_timeout", 120),
+            whisper["cli"],
+            whisper["model"],
+            whisper["language"],
+            prompt=whisper.get("prompt", ""),
+            timeout=whisper.get("timeout", 120),
         )
         clipboard = ClipboardManager()
-        notifier = SoundNotifier(volume=cfg.get("sound_volume", 50)) if cfg.get("sound_feedback", True) else None
-        housekeeper = Housekeeping(audio_dir, cfg["max_audio_files"])
-        listener = HotkeyListener(cfg["hotkey"], cfg["hold_delay"])
+        notifier = SoundNotifier(volume=sound_cfg.get("signal_volume", 30))
+        housekeeper = Housekeeping(audio_dir, transcripts_dir, storage)
+        listener = HotkeyListener(hotkey["key"], hotkey["hold_delay"])
 
         state = STATE_IDLE
         state_lock = threading.Lock()
@@ -1633,7 +1786,7 @@ class RedictumApp:
                     return
                 state = STATE_RECORDING
             recorder.start()
-            if notifier:
+            if sound_cfg.get("signal_start", True):
                 notifier.play_start()
 
         def on_release() -> None:
@@ -1647,14 +1800,14 @@ class RedictumApp:
                 nonlocal state
                 try:
                     audio_path = recorder.stop()
-                    if notifier:
+                    if sound_cfg.get("signal_processing", False):
                         notifier.play_processing()
                     if audio_path is None:
                         logging.warning("Recording produced no audio")
                         return
 
                     # Normalize
-                    if cfg.get("normalize_audio", True):
+                    if audio.get("normalize", True):
                         try:
                             audio_path = processor.normalize(audio_path)
                         except RedictumError:
@@ -1669,15 +1822,15 @@ class RedictumApp:
                     logging.info("Transcribed: %r", text)
 
                     # Apply prefix/postfix
-                    prefix = cfg.get("text_prefix", "")
-                    postfix = cfg.get("text_postfix", "")
+                    prefix = clip_cfg.get("prefix", "")
+                    postfix = clip_cfg.get("postfix", "")
                     final_text = f"{prefix}{text}{postfix}"
 
                     # Log transcript
                     _log_transcript(transcripts_dir, final_text)
 
                     # Clipboard: save → copy → paste → restore
-                    if cfg.get("auto_paste", True):
+                    if clip_cfg.get("auto", True):
                         saved = clipboard.get_clipboard()
                         clipboard.copy(final_text)
                         clipboard.paste()
@@ -1687,17 +1840,18 @@ class RedictumApp:
                     else:
                         clipboard.copy(final_text)
 
-                    if notifier:
+                    if sound_cfg.get("signal_done", True):
                         notifier.play_stop()
                     housekeeper.rotate_audio()
+                    housekeeper.rotate_transcripts()
                     logging.info("Pipeline complete, state -> idle")
                 except RedictumError:
                     logging.exception("Pipeline error")
-                    if notifier:
+                    if sound_cfg.get("signal_error", True):
                         notifier.play_error()
                 except Exception:
                     logging.exception("Unexpected pipeline error")
-                    if notifier:
+                    if sound_cfg.get("signal_error", True):
                         notifier.play_error()
                 finally:
                     with state_lock:
@@ -1790,6 +1944,59 @@ def main() -> int:
         return EXIT_ERROR
 
     return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# Tone synthesis (used by SoundNotifier)
+# ---------------------------------------------------------------------------
+# Each tone is a list of float samples in [-1, 1] range.  Synthesis uses
+# additive sine waves with exponential envelopes to produce short, distinct
+# notification sounds.  The helpers below are intentionally compact — they
+# run once at startup and the output is cached as WAV files.
+
+def _generate_tones() -> dict[str, list[float]]:
+    """Return ``{name: samples}`` for all notification sounds."""
+    sr = 44100
+    _s = lambda f, t: math.sin(2 * math.pi * f * t)  # noqa: E731
+    _e = math.exp                                      # noqa: E731
+
+    def _beep(freq: float) -> list[float]:
+        """Single short beep at *freq* Hz (used by 'start')."""
+        n = int(sr * 0.04)
+        return [(1 - _e(-800 * t)) * _e(-20 * t) * _s(freq, t)
+                for i in range(n) for t in [i / sr]]
+
+    gap = [0.0] * int(sr * 0.03)
+
+    return {
+        # Three ascending beeps — recording started
+        "start": _beep(1000) + gap + _beep(1300) + gap + _beep(1600),
+
+        # Metallic tick with inharmonic overtones — transcription started
+        "processing": [
+            _e(-25 * t) * (1 - _e(-800 * t))
+            * (0.5 * _s(900, t) + 0.3 * _s(2160, t) + 0.2 * _s(3690, t))
+            for i in range(int(sr * 0.08)) for t in [i / sr]
+        ],
+
+        # Glass tap with shimmering harmonics — result pasted
+        "done": [
+            _e(-8 * t) * (1 - _e(-2000 * t))
+            * (0.4 * _s(2200, t)
+               + 0.3 * _s(3300, t) * _e(-10 * t)
+               + 0.2 * _s(5940, t) * _e(-15 * t)
+               + 0.1 * _s(9460, t) * _e(-20 * t))
+            for i in range(int(sr * 0.2)) for t in [i / sr]
+        ],
+
+        # Low buzz with harmonics — error
+        "error": [
+            (1 - t / 0.25) * (1 - _e(-300 * t))
+            * (0.4 * _s(150, t) + 0.3 * _s(300, t)
+               + 0.2 * _s(450, t) + 0.1 * _s(750, t))
+            for i in range(int(sr * 0.25)) for t in [i / sr]
+        ],
+    }
 
 
 if __name__ == "__main__":

@@ -12,8 +12,8 @@ System-wide voice-to-text CLI utility for Linux. Captures hotkeys, records micro
 - **Audio Processing:** FFmpeg (via subprocess)
 - **Transcription:** whisper.cpp CLI
 - **Keyboard Hotkeys:** pynput
+- **Config:** PyYAML (YAML with comments, config.yaml next to script)
 - **Clipboard:** xclip / xdotool (via subprocess)
-- **Config Format:** JSON (config.json next to script)
 - **Architecture:** Single-file executable (`redictum`)
 
 ## Project Structure
@@ -31,7 +31,7 @@ redictum-terminal-py/
 ├── .venv/                    # Python virtual environment (Python 3.10)
 ├── AGENTS.md                 # This file — project structure map
 ├── redictum                  # Main executable (chmod +x, single file)
-├── config.json               # Generated on first run, user-editable
+├── config.yaml               # Generated on first run, user-editable (with comments)
 ├── audio/                    # Recorded audio files (auto-created)
 ├── transcripts/              # Transcription output (auto-created)
 └── logs/                     # Log files (auto-created)
@@ -41,7 +41,7 @@ redictum-terminal-py/
 | File | Purpose |
 |------|---------|
 | `redictum` | Main CLI entry point (argparse, all classes in one file) |
-| `config.json` | Runtime config, auto-generated from DEFAULT_CONFIG |
+| `config.yaml` | Runtime config, auto-generated with comments |
 
 ## CLI Commands
 | Command | Description |
@@ -57,7 +57,7 @@ redictum-terminal-py/
 ## Code Architecture (inside `redictum`)
 | Class | Status | Purpose |
 |-------|--------|---------|
-| `ConfigManager` | **Working** | Load/generate/merge config.json |
+| `ConfigManager` | **Working** | Load/generate/merge config.yaml (YAML with comments) |
 | `DirectoryManager` | **Working** | Create audio/, transcripts/, logs/ |
 | `RedictumApp` | **Working** | Orchestrator, wires components |
 | `Diagnostics` | **Working** | Check external dependencies, auto-install |

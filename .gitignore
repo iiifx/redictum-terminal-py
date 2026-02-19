@@ -12,7 +12,8 @@ __pycache__/
 dist/
 build/
 .env
-config.json
+config.yaml
+.sounds/
 audio/
 transcripts/
 logs/
