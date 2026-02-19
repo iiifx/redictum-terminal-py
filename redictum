@@ -68,8 +68,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "whisper": {
             "cli": "~/whisper.cpp/build/bin/whisper-cli",
             "model": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin",
-            "language": "ru",
-            "prompt": "Грамотная разговорная речь на русском языке. Правильная расстановка знаков препинания: запятые, точки, вопросительные и восклицательные знаки. Используются англицизмы, технические термины и сокращения.",
+            "language": "auto",
+            "prompt": "Proper conversational speech with correct punctuation: commas, periods, question marks and exclamation marks. Anglicisms, technical terms and abbreviations are used.",
             "timeout": 120,
         },
     },
@@ -83,6 +83,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "hotkey": {
             "key": "Insert",
             "hold_delay": 0.6,
+            "translate_key": "ctrl+Insert",
         },
     },
     "clipboard": {
@@ -127,14 +128,19 @@ dependency:
     model: "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin"
 
     # Language for transcription (e.g., "ru", "en", "de", "fr")
-    language: "ru"
+    # Language for transcription: "auto" detects from system locale,
+    # or set explicitly (e.g., "ru", "en", "uk", "de", "fr")
+    language: "auto"
 
     # Optional prompt to guide whisper transcription
     # Helps with domain-specific vocabulary and punctuation
-    prompt: "Грамотная разговорная речь на русском языке. Правильная расстановка знаков препинания: запятые, точки, вопросительные и восклицательные знаки. Используются англицизмы, технические термины и сокращения."
+    # Optional prompt to guide whisper transcription
+    # Helps with punctuation and domain-specific vocabulary
+    prompt: "Proper conversational speech with correct punctuation: commas, periods, question marks and exclamation marks. Anglicisms, technical terms and abbreviations are used."
 
     # Maximum time (seconds) to wait for transcription to finish
     timeout: 120
+
 
 # --- Audio Recording ---------------------------------------------------------
 
@@ -155,6 +161,10 @@ input:
 
     # How long (seconds) to hold the key before recording starts
     hold_delay: 0.6
+
+    # Hotkey for translate mode (transcribe + translate to English)
+    # Format: "ctrl+Insert", "alt+F12", or empty string to disable
+    translate_key: "ctrl+Insert"
 
 # --- Clipboard ---------------------------------------------------------------
 
@@ -1276,6 +1286,23 @@ class AudioProcessor:
         return output_path
 
 
+def _detect_language() -> str:
+    """Detect language code from system locale (e.g., 'ru', 'en', 'uk').
+
+    Returns:
+        Two-letter ISO 639-1 language code, or empty string if
+        detection fails.
+    """
+    import locale
+    loc = locale.getdefaultlocale()[0] or os.environ.get("LANG", "")
+    # loc is like "ru_RU.UTF-8" or "ru_RU" or "en_US.UTF-8"
+    if "_" in loc:
+        return loc.split("_")[0].lower()
+    if loc and len(loc) >= 2:
+        return loc[:2].lower()
+    return ""
+
+
 class Transcriber:
     """Transcribe audio via whisper.cpp CLI."""
 
@@ -1295,11 +1322,12 @@ class Transcriber:
         self._prompt = prompt
         self._timeout = timeout
 
-    def transcribe(self, audio_path: Path) -> str:
+    def transcribe(self, audio_path: Path, translate: bool = False) -> str:
         """Transcribe the given audio file to text.
 
         Args:
             audio_path: Path to the audio file.
+            translate: If True, also translate to English via --translate.
 
         Returns:
             Transcribed text string (empty if nothing useful detected).
@@ -1310,12 +1338,17 @@ class Transcriber:
         cmd = [
             self._cli,
             "-m", self._model,
-            "-l", self._language,
             "-f", str(audio_path),
             "--no-timestamps",
             "-np",
         ]
-        if self._prompt:
+        if translate:
+            # No -l flag: whisper auto-detects source language
+            # and --translate outputs English
+            cmd.append("--translate")
+        elif self._language:
+            cmd.extend(["-l", self._language])
+        if not translate and self._prompt:
             cmd.extend(["--prompt", self._prompt])
 
         try:
@@ -1344,7 +1377,21 @@ class Transcriber:
 
 
 class ClipboardManager:
-    """Copy text to clipboard and optionally paste via xdotool."""
+    """Copy text to clipboard, paste via xdotool, save/restore contents.
+
+    Supports saving and restoring text and binary clipboard data (images,
+    file lists) so that the user's clipboard is preserved across paste
+    operations.
+    """
+
+    # X11 protocol targets — not actual data, skip when saving.
+    _SKIP_TARGETS = frozenset({
+        "TARGETS", "MULTIPLE", "SAVE_TARGETS", "TIMESTAMP", "DELETE",
+        "INCR", "INSERT_PROPERTY", "INSERT_SELECTION", "MANAGER",
+    })
+
+    # Target patterns we know how to save and restore.
+    _SUPPORTED_PREFIXES = ("text/", "image/", "UTF8_STRING", "STRING", "TEXT")
 
     def copy(self, text: str) -> None:
         """Copy text to the system clipboard via xclip."""
@@ -1364,18 +1411,72 @@ class ClipboardManager:
             stderr=subprocess.DEVNULL,
         )
 
-    def get_clipboard(self) -> str:
-        """Read current clipboard contents for save/restore."""
+    def save(self) -> tuple[str, bytes] | None:
+        """Save current clipboard contents (target type + raw data).
+
+        Returns:
+            ``(target, data)`` tuple or ``None`` if clipboard is empty
+            or contains unsupported content.
+        """
+        target = self._detect_target()
+        if target is None:
+            return None
         try:
             result = subprocess.run(
-                ["xclip", "-selection", "clipboard", "-o"],
+                ["xclip", "-selection", "clipboard", "-t", target, "-o"],
+                capture_output=True,
+                timeout=5,
+            )
+            if result.returncode != 0 or not result.stdout:
+                return None
+            return (target, result.stdout)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+
+    def restore(self, snapshot: tuple[str, bytes]) -> None:
+        """Restore previously saved clipboard contents.
+
+        Args:
+            snapshot: ``(target, data)`` tuple from ``save()``.
+        """
+        target, data = snapshot
+        try:
+            subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", target],
+                input=data,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+    def _detect_target(self) -> str | None:
+        """Detect the best clipboard target to save.
+
+        Reads the TARGETS list from xclip, filters out X11 internal
+        targets, and returns the first supported one (most specific
+        format as advertised by the clipboard owner).
+        """
+        try:
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-            return result.stdout if result.returncode == 0 else ""
+            if result.returncode != 0 or not result.stdout:
+                return None
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            return ""
+            return None
+
+        for line in result.stdout.splitlines():
+            target = line.strip()
+            if not target or target in self._SKIP_TARGETS:
+                continue
+            if any(target.startswith(p) for p in self._SUPPORTED_PREFIXES):
+                return target
+        return None
 
 
 class SoundNotifier:
@@ -1475,36 +1576,60 @@ class HotkeyListener:
         "esc": "esc",
     }
 
-    def __init__(self, hotkey: str, hold_delay: float) -> None:
+    _MODIFIER_MAP: dict[str, tuple[str, ...]] = {
+        "ctrl":  ("ctrl_l", "ctrl_r"),
+        "alt":   ("alt_l", "alt_r", "alt_gr"),
+        "shift": ("shift_l", "shift_r"),
+    }
+
+    def __init__(self, hotkey: str, hold_delay: float, translate_key: str = "") -> None:
         self._hotkey = hotkey
+        self._translate_key = translate_key
         self._hold_delay = hold_delay
-        self._target_key: Any = None  # set in start() after pynput import
+        self._target_key: Any = None
+        self._target_mods: frozenset[Any] = frozenset()
+        self._translate_target_key: Any = None
+        self._translate_target_mods: frozenset[Any] = frozenset()
+        self._held_mods: set[Any] = set()
+        self._all_mod_keys: frozenset[Any] = frozenset()
         self._listener: Any = None
         self._hold_timer: threading.Timer | None = None
         self._is_holding = False
-        self._on_hold: Callable[[], None] | None = None
-        self._on_release: Callable[[], None] | None = None
+        self._pending_mode: str = "transcribe"
+        self._on_hold: Callable[[str], None] | None = None
+        self._on_release: Callable[[str], None] | None = None
 
-    def start(self, on_hold: Callable[[], None], on_release: Callable[[], None]) -> None:
+    def start(self, on_hold: Callable[[str], None], on_release: Callable[[str], None]) -> None:
         """Start listening for the push-to-talk hotkey.
 
         Args:
-            on_hold: Called when key is held longer than hold_delay.
-            on_release: Called when key is released after hold was triggered.
+            on_hold: Called with mode ("transcribe"/"translate") when key
+                     is held longer than hold_delay.
+            on_release: Called with mode when key is released after hold.
         """
-        from pynput.keyboard import Listener
+        from pynput.keyboard import Key, Listener
 
         self._on_hold = on_hold
         self._on_release = on_release
-        self._target_key = self._parse_key(self._hotkey)
+        self._target_key, self._target_mods = self._parse_combo(self._hotkey)
+        if self._translate_key:
+            self._translate_target_key, self._translate_target_mods = \
+                self._parse_combo(self._translate_key)
+        # Collect all pynput Key objects for modifiers
+        all_mods: set[Any] = set()
+        for key_names in self._MODIFIER_MAP.values():
+            for name in key_names:
+                if hasattr(Key, name):
+                    all_mods.add(getattr(Key, name))
+        self._all_mod_keys = frozenset(all_mods)
         self._listener = Listener(
             on_press=self._on_press,
             on_release=self._on_key_release,
         )
         self._listener.start()
         logging.info(
-            "Hotkey listener started: %s (hold %.1fs)",
-            self._hotkey, self._hold_delay,
+            "Hotkey listener started: %s (hold %.1fs), translate: %s",
+            self._hotkey, self._hold_delay, self._translate_key or "disabled",
         )
 
     def stop(self) -> None:
@@ -1517,22 +1642,33 @@ class HotkeyListener:
             self._listener = None
 
     def _on_press(self, key: Any) -> None:
-        """Handle key press: start hold timer if target key."""
-        if self._key_matches(key) and not self._is_holding and self._hold_timer is None:
-            self._hold_timer = threading.Timer(self._hold_delay, self._fire_hold)
-            self._hold_timer.daemon = True
-            self._hold_timer.start()
+        """Handle key press: track modifiers and start hold timer."""
+        if key in self._all_mod_keys:
+            self._held_mods.add(key)
+            return
+        mode = self._resolve_mode(key)
+        if mode is None:
+            return
+        if self._is_holding or self._hold_timer is not None:
+            return
+        self._pending_mode = mode
+        self._hold_timer = threading.Timer(self._hold_delay, self._fire_hold)
+        self._hold_timer.daemon = True
+        self._hold_timer.start()
 
     def _fire_hold(self) -> None:
         """Called when hold_delay expires — trigger on_hold callback."""
         self._is_holding = True
         self._hold_timer = None
         if self._on_hold:
-            self._on_hold()
+            self._on_hold(self._pending_mode)
 
     def _on_key_release(self, key: Any) -> None:
-        """Handle key release: cancel timer or trigger on_release."""
-        if not self._key_matches(key):
+        """Handle key release: track modifiers, cancel timer or trigger on_release."""
+        if key in self._all_mod_keys:
+            self._held_mods.discard(key)
+            return
+        if not (key == self._target_key or key == self._translate_target_key):
             return
         if self._hold_timer is not None:
             self._hold_timer.cancel()
@@ -1540,11 +1676,51 @@ class HotkeyListener:
         if self._is_holding:
             self._is_holding = False
             if self._on_release:
-                self._on_release()
+                self._on_release(self._pending_mode)
 
-    def _key_matches(self, key: Any) -> bool:
-        """Check if pressed key matches the target key."""
-        return key == self._target_key
+    def _resolve_mode(self, key: Any) -> str | None:
+        """Determine mode from pressed key + held modifiers.
+
+        Priority: translate (more specific combo) > transcribe.
+        """
+        if (self._translate_target_key is not None
+                and key == self._translate_target_key
+                and self._mods_match(self._translate_target_mods)):
+            return "translate"
+        if key == self._target_key and self._mods_match(self._target_mods):
+            return "transcribe"
+        return None
+
+    def _mods_match(self, required_mods: frozenset[Any]) -> bool:
+        """Check EXACT match of modifier groups (ctrl, alt, shift)."""
+        from pynput.keyboard import Key
+        for key_names in self._MODIFIER_MAP.values():
+            group = frozenset(
+                getattr(Key, n) for n in key_names if hasattr(Key, n)
+            )
+            group_required = bool(required_mods & group)
+            group_held = bool(self._held_mods & group)
+            if group_required != group_held:
+                return False
+        return True
+
+    @classmethod
+    def _parse_combo(cls, combo: str) -> tuple[Any, frozenset[Any]]:
+        """Parse "ctrl+Insert" into (Key.insert, frozenset({Key.ctrl_l, Key.ctrl_r}))."""
+        from pynput.keyboard import Key
+        parts = [p.strip() for p in combo.split("+")]
+        modifier_strings = parts[:-1]
+        key_string = parts[-1]
+        mods: set[Any] = set()
+        for mod_str in modifier_strings:
+            normalized = mod_str.lower()
+            if normalized not in cls._MODIFIER_MAP:
+                raise RedictumError(f"Unknown modifier: '{mod_str}'")
+            for attr in cls._MODIFIER_MAP[normalized]:
+                if hasattr(Key, attr):
+                    mods.add(getattr(Key, attr))
+        trigger = cls._parse_key(key_string)
+        return trigger, frozenset(mods)
 
     @classmethod
     def _parse_key(cls, hotkey: str) -> Any:
@@ -1761,40 +1937,53 @@ class RedictumApp:
         sound_cfg = cfg["notification"]["sound"]
         storage = cfg["storage"]
 
+        # Resolve language: "auto" -> detect from system locale
+        language = whisper.get("language", "auto")
+        if language == "auto":
+            language = _detect_language()
+            logging.info("Language auto-detected from locale: %r", language)
+
         # Build pipeline components
         recorder = AudioRecorder(audio_dir, audio["device"])
         processor = AudioProcessor()
         transcriber = Transcriber(
             whisper["cli"],
             whisper["model"],
-            whisper["language"],
+            language,
             prompt=whisper.get("prompt", ""),
             timeout=whisper.get("timeout", 120),
         )
         clipboard = ClipboardManager()
         notifier = SoundNotifier(volume=sound_cfg.get("signal_volume", 30))
         housekeeper = Housekeeping(audio_dir, transcripts_dir, storage)
-        listener = HotkeyListener(hotkey["key"], hotkey["hold_delay"])
+        listener = HotkeyListener(
+            hotkey["key"], hotkey["hold_delay"],
+            translate_key=hotkey.get("translate_key", ""),
+        )
 
         state = STATE_IDLE
         state_lock = threading.Lock()
+        _current_mode = "transcribe"
 
-        def on_hold() -> None:
-            nonlocal state
+        def on_hold(mode: str) -> None:
+            nonlocal state, _current_mode
             with state_lock:
                 if state != STATE_IDLE:
                     return
                 state = STATE_RECORDING
+                _current_mode = mode
             recorder.start()
             if sound_cfg.get("signal_start", True):
                 notifier.play_start()
+            logging.info("Recording started (mode: %s)", mode)
 
-        def on_release() -> None:
+        def on_release(mode: str) -> None:
             nonlocal state
             with state_lock:
                 if state != STATE_RECORDING:
                     return
                 state = STATE_PROCESSING
+            captured_mode = _current_mode
 
             def worker() -> None:
                 nonlocal state
@@ -1814,12 +2003,15 @@ class RedictumApp:
                             logging.exception("Normalization failed, using raw audio")
 
                     # Transcribe
-                    text = transcriber.transcribe(audio_path)
+                    text = transcriber.transcribe(
+                        audio_path,
+                        translate=(captured_mode == "translate"),
+                    )
                     if not text:
                         logging.info("Transcription returned empty text")
                         return
 
-                    logging.info("Transcribed: %r", text)
+                    logging.info("Transcribed (mode: %s): %r", captured_mode, text)
 
                     # Apply prefix/postfix
                     prefix = clip_cfg.get("prefix", "")
@@ -1831,12 +2023,13 @@ class RedictumApp:
 
                     # Clipboard: save → copy → paste → restore
                     if clip_cfg.get("auto", True):
-                        saved = clipboard.get_clipboard()
+                        saved = clipboard.save()
                         clipboard.copy(final_text)
                         clipboard.paste()
                         # Restore previous clipboard after a short delay
                         time.sleep(0.2)
-                        clipboard.copy(saved)
+                        if saved:
+                            clipboard.restore(saved)
                     else:
                         clipboard.copy(final_text)
 
@@ -1905,6 +2098,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"redictum {VERSION}",
     )
+    parser.add_argument(
+        "--config",
+        action="store_true",
+        help="Recreate config.yaml with default values",
+    )
 
     sub = parser.add_subparsers(dest="command")
 
@@ -1927,6 +2125,11 @@ def main() -> int:
 
     script_dir = Path(__file__).resolve().parent
     app = RedictumApp(script_dir)
+
+    if args.config:
+        config_path = script_dir / "config.yaml"
+        if config_path.exists():
+            config_path.unlink()
 
     try:
         if args.command is None:

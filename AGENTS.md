@@ -3,7 +3,7 @@
 > Project map for AI agents. Keep this file up-to-date as the project evolves.
 
 ## Project Overview
-System-wide voice-to-text CLI utility for Linux. Captures hotkeys, records microphone audio, transcribes via whisper.cpp, and pastes text into active input.
+System-wide voice-to-text CLI utility for Linux. Captures hotkeys, records microphone audio, transcribes via whisper.cpp, and pastes text into active input. Supports two modes: transcription (Insert) and translate-to-English (Ctrl+Insert).
 
 ## Tech Stack
 - **Language:** Python 3.10+ (stdlib only, no external dependencies)
@@ -51,6 +51,7 @@ redictum-terminal-py/
 | `./redictum stop` | Stop daemon |
 | `./redictum status` | Show daemon status |
 | `./redictum whisper` | Setup whisper.cpp (install, check, reconfigure) |
+| `./redictum --config` | Recreate config.yaml before starting (debug) |
 | `./redictum --version` | Print version |
 | `./redictum --help` | Show help |
 
@@ -64,11 +65,11 @@ redictum-terminal-py/
 | `Daemon` | **Working** | PID file, double-fork daemon, signal handling |
 | `AudioRecorder` | **Working** | Record via arecord (start/stop/cancel) |
 | `AudioProcessor` | **Working** | Normalize via ffmpeg loudnorm |
-| `Transcriber` | **Working** | Transcribe via whisper-cli |
-| `ClipboardManager` | **Working** | xclip copy + xdotool paste |
+| `Transcriber` | **Working** | Transcribe via whisper-cli (--translate for English, no prompt in translate mode) |
+| `ClipboardManager` | **Working** | xclip copy/paste + universal save/restore (text, images, binary) |
 | `SoundNotifier` | **Working** | WAV feedback tones via paplay |
-| `HotkeyListener` | **Working** | Push-to-talk via pynput (hold delay) |
-| `Housekeeping` | **Partial** | Rotate audio (working), log cleanup (stub) |
+| `HotkeyListener` | **Working** | Push-to-talk via pynput (hold delay, modifier combos, translate mode) |
+| `Housekeeping` | **Working** | Rotate audio + transcript files |
 | `WhisperInstaller` | **Working** | Clone, build whisper.cpp, download models |
 
 ## AI Context Files
