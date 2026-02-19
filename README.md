@@ -16,15 +16,13 @@ For **translate mode**, use `Ctrl+Insert` instead — speech is transcribed and 
 ## Installation
 
 ```bash
-cd ~
-curl -fsSL https://github.com/iiifx/redictum-terminal-py/raw/main/redictum -o redictum
-chmod +x redictum
+mkdir -p ~/redictum && curl -fsSL https://github.com/iiifx/redictum-terminal-py/raw/main/redictum -o ~/redictum/redictum && chmod +x ~/redictum/redictum
 ```
 
 Run:
 
 ```bash
-./redictum
+~/redictum/redictum
 ```
 
 On first run, the script will:
