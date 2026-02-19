@@ -17,7 +17,7 @@ For **translate mode**, use `Ctrl+Insert` instead — speech is transcribed and 
 
 ```bash
 cd ~
-curl -fsSL https://github.com/OWNER/REPO/raw/main/redictum -o redictum
+curl -fsSL https://github.com/iiifx/redictum-terminal-py/raw/main/redictum -o redictum
 chmod +x redictum
 ```
 
