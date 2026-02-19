@@ -2,9 +2,7 @@
 
 **Simple. All-in-one. Run. Hold. Talk. Enjoy!**
 
-Voice-to-text CLI for Linux. Hold a key, speak, release — transcribed text is pasted automatically.
-
-Uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for local speech recognition. No cloud APIs, everything runs on your machine.
+Voice-to-text CLI for Linux. Uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for local speech recognition. No cloud APIs, everything runs on your machine.
 
 ## How it works
 
