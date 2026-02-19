@@ -73,62 +73,6 @@ On first run, the script will:
 
 For **translate mode**, use `Ctrl+Insert` instead — speech is transcribed and translated to English.
 
-## Configuration
-
-Generated on first run at `config.yaml`:
-
-```yaml
-dependency:
-  whisper:
-    cli: "~/whisper.cpp/build/bin/whisper-cli"
-    model: "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin"
-    language: "auto"        # auto-detect from locale, or set: "ru", "en", "de"...
-    prompt: "..."           # guide transcription style
-    timeout: 120
-
-audio:
-  recording:
-    device: "pulse"
-    normalize: true
-
-input:
-  hotkey:
-    key: "Insert"           # push-to-talk key
-    hold_delay: 0.6         # seconds to hold before recording starts
-    translate_key: "ctrl+Insert"
-
-clipboard:
-  paste:
-    auto: true              # auto-paste via Ctrl+V
-    prefix: ""
-    postfix: " "
-
-notification:
-  sound:
-    signal_volume: 30
-    signal_start: true
-    signal_processing: false
-    signal_done: true
-    signal_error: true
-
-storage:
-  audio:
-    max_files: 50
-  transcripts:
-    max_files: 50
-```
-
-## Testing
-
-```bash
-# Unit tests (117 tests)
-pip install pytest
-pytest
-
-# E2E tests (Docker, 10 daemon lifecycle tests)
-docker compose up --build --abort-on-container-exit
-```
-
 ## License
 
 [MIT](LICENSE) — Vitaliy Khomenko, [Mojam](https://mojam.co)
