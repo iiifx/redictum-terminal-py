@@ -60,7 +60,6 @@ APT_PACKAGES: dict[str, str] = {
     "xdotool": "xdotool",
     "cmake": "cmake",
     "build-essential": "build-essential",
-    "git": "git",
 }
 
 PIP_PACKAGES: dict[str, str] = {
@@ -593,7 +592,8 @@ class Diagnostics:
 class WhisperInstaller:
     """Setup wizard for whisper.cpp: install, configure, reconfigure."""
 
-    REPO_URL = "https://github.com/ggerganov/whisper.cpp.git"
+    WHISPER_VERSION = "v1.8.3"
+    TARBALL_URL = "https://github.com/ggerganov/whisper.cpp/archive/refs/tags/{version}.tar.gz"
     HF_BASE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 
     MODELS: list[tuple[str, str, str]] = [
@@ -626,7 +626,7 @@ class WhisperInstaller:
     # -- Flows ---------------------------------------------------------------
 
     def _fresh_install(self) -> None:
-        """Full install: ensure CUDA, clone, build, download model."""
+        """Full install: ensure CUDA, download, build, download model."""
         cuda_available = self._ensure_cuda()
         self._clone()
         self._build(use_cuda=cuda_available)
@@ -831,25 +831,46 @@ class WhisperInstaller:
         return answer in ("y", "yes")
 
     def _clone(self) -> None:
-        """Clone or update the whisper.cpp repository."""
+        """Download and extract the whisper.cpp release tarball."""
+        url = self.TARBALL_URL.format(version=self.WHISPER_VERSION)
+        tarball = Path(tempfile.gettempdir()) / "whisper.cpp.tar.gz"
+
         if self._install_dir.exists():
-            _rprint(f"  Updating {self._install_dir}...")
-            result = subprocess.run(
-                ["git", "-C", str(self._install_dir), "pull"],
-                capture_output=True, text=True,
-            )
-            if result.returncode != 0:
-                raise RedictumError(f"git pull failed: {result.stderr[:200]}")
-            _rprint("  [green]\u2713[/green] Repository updated")
+            _rprint(f"  Removing old {self._install_dir}...")
+            shutil.rmtree(self._install_dir)
+
+        _rprint(f"  Downloading whisper.cpp {self.WHISPER_VERSION}...")
+        if shutil.which("curl"):
+            cmd = ["curl", "-fsSL", "-o", str(tarball), url]
+        elif shutil.which("wget"):
+            cmd = ["wget", "-q", "-O", str(tarball), url]
         else:
-            _rprint(f"  Cloning whisper.cpp to {self._install_dir}...")
-            result = subprocess.run(
-                ["git", "clone", "--depth", "1", self.REPO_URL,
-                 str(self._install_dir)],
+            raise RedictumError("Neither curl nor wget found")
+
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            tarball.unlink(missing_ok=True)
+            raise RedictumError("Failed to download whisper.cpp tarball")
+
+        _rprint("  Extracting...")
+        result = subprocess.run(
+            ["tar", "xzf", str(tarball), "-C", str(self._install_dir.parent)],
+        )
+        tarball.unlink(missing_ok=True)
+        if result.returncode != 0:
+            raise RedictumError("Failed to extract whisper.cpp tarball")
+
+        # tar extracts to whisper.cpp-<version> (without 'v' prefix)
+        version_stripped = self.WHISPER_VERSION.lstrip("v")
+        extracted = self._install_dir.parent / f"whisper.cpp-{version_stripped}"
+        if extracted.exists():
+            extracted.rename(self._install_dir)
+        elif not self._install_dir.exists():
+            raise RedictumError(
+                f"Expected directory {extracted} not found after extraction"
             )
-            if result.returncode != 0:
-                raise RedictumError("git clone failed")
-            _rprint("  [green]\u2713[/green] Repository cloned")
+
+        _rprint(f"  [green]\u2713[/green] whisper.cpp {self.WHISPER_VERSION} ready")
 
     def _build(self, use_cuda: bool) -> None:
         """Configure and build whisper.cpp."""

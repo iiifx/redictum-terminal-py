@@ -14,7 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xdotool \
     cmake \
     build-essential \
-    git \
     xvfb \
     procps \
     && rm -rf /var/lib/apt/lists/*
