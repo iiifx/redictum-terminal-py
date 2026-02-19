@@ -6,6 +6,7 @@
 .agents/
 .claude/
 __pycache__/
+.pytest_cache/
 *.pyc
 *.pyo
 *.egg-info/
@@ -18,3 +19,4 @@ audio/
 transcripts/
 logs/
 .initialized
+AGENTS.md

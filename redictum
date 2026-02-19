@@ -26,7 +26,7 @@ try:
 except ImportError:
     _console = None
 
-VERSION = "1.0.0-dev"
+VERSION = "1.0.0"
 
 EXIT_OK = 0
 EXIT_ERROR = 1
