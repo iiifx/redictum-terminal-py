@@ -1,0 +1,4 @@
+#!/bin/bash
+# Fake whisper-cli: output a fixed transcription and exit successfully.
+echo "Hello from fake whisper"
+exit 0

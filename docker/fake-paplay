@@ -1,0 +1,4 @@
+#!/bin/bash
+# Fake paplay: silently accept any arguments and exit successfully.
+# Real paplay requires a PulseAudio server which is unavailable in Docker.
+exit 0

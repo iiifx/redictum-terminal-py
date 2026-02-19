@@ -1,0 +1,22 @@
+#!/bin/bash
+# Fake arecord: write a minimal valid WAV file and wait for SIGTERM.
+# Real arecord requires ALSA hardware which is unavailable in Docker.
+# The last argument is the output file path.
+
+OUTPUT="${@: -1}"
+
+if [[ -n "$OUTPUT" ]]; then
+    python3 -c "
+import struct, sys
+sr, ch, bps, n = 16000, 1, 16, 1000
+pcm = b'\x00' * n
+hdr = struct.pack('<4sI4s4sIHHIIHH4sI',
+    b'RIFF', 36+n, b'WAVE', b'fmt ', 16, 1, ch, sr,
+    sr*ch*bps//8, ch*bps//8, bps, b'data', n)
+sys.stdout.buffer.write(hdr + pcm)
+" > "$OUTPUT"
+fi
+
+# Wait for SIGTERM (the way AudioRecorder.stop() terminates arecord)
+trap 'exit 0' TERM INT
+while true; do sleep 100 & wait $!; done
