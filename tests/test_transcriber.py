@@ -13,15 +13,23 @@ import pytest
 
 
 @pytest.fixture()
-def make_transcriber():
+def make_transcriber(tmp_path):
     """Factory for Transcriber with configurable params."""
 
     def _make(language="ru", prompt="Test prompt.", timeout=120):
         from redictum import Transcriber
 
+        # Create temporary files for whisper CLI and model
+        cli_path = tmp_path / "whisper-cli"
+        cli_path.touch()
+        cli_path.chmod(0o755)
+        
+        model_path = tmp_path / "model.bin"
+        model_path.write_bytes(b"fake model data")
+
         return Transcriber(
-            whisper_cli="/usr/bin/whisper-cli",
-            model_path="/models/model.bin",
+            whisper_cli=str(cli_path),
+            model_path=str(model_path),
             language=language,
             prompt=prompt,
             timeout=timeout,
