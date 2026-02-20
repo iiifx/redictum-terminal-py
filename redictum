@@ -781,7 +781,11 @@ class WhisperInstaller:
 
         # Download and install keyring
         keyring_url = self.CUDA_KEYRING_URL.format(distro=distro)
-        keyring_deb = Path(tempfile.gettempdir()) / "cuda-keyring.deb"
+        # Use secure temporary file with proper cleanup
+        keyring_fd, keyring_path = tempfile.mkstemp(suffix=".deb", prefix="cuda-keyring-")
+        keyring_deb = Path(keyring_path)
+        os.close(keyring_fd)  # Close the file descriptor, we'll use the path
+        
         _rprint("  [dim]Downloading NVIDIA CUDA keyring...[/dim]")
         dl_cmd: list[str] = []
         if shutil.which("curl"):
@@ -797,14 +801,22 @@ class WhisperInstaller:
             return False
 
         _rprint("  [dim]Installing CUDA keyring and toolkit (sudo required)...[/dim]")
-        install_script = (
-            f"sudo dpkg -i {keyring_deb}"
-            f" && sudo apt-get update -qq"
-            f" && sudo apt-get install -y cuda-toolkit"
-        )
-        result = subprocess.run(["bash", "-c", install_script])
-        # Clean up
+        # Install CUDA keyring package
+        result = subprocess.run(["sudo", "dpkg", "-i", str(keyring_deb)])
         keyring_deb.unlink(missing_ok=True)
+        
+        if result.returncode != 0:
+            _rprint("  [yellow]⚠[/yellow] Failed to install CUDA keyring")
+            return False
+        
+        # Update package list
+        result = subprocess.run(["sudo", "apt-get", "update", "-qq"])
+        if result.returncode != 0:
+            _rprint("  [yellow]⚠[/yellow] Failed to update package list")
+            return False
+        
+        # Install CUDA toolkit
+        result = subprocess.run(["sudo", "apt-get", "install", "-y", "cuda-toolkit"])
 
         if result.returncode != 0:
             _rprint("  [yellow]\u26a0[/yellow] CUDA toolkit installation failed")
@@ -833,7 +845,10 @@ class WhisperInstaller:
     def _clone(self) -> None:
         """Download and extract the whisper.cpp release tarball."""
         url = self.TARBALL_URL.format(version=self.WHISPER_VERSION)
-        tarball = Path(tempfile.gettempdir()) / "whisper.cpp.tar.gz"
+        # Use secure temporary file with proper cleanup
+        tarball_fd, tarball_path = tempfile.mkstemp(suffix=".tar.gz", prefix="whisper.cpp-")
+        tarball = Path(tarball_path)
+        os.close(tarball_fd)  # Close the file descriptor, we'll use the path
 
         if self._install_dir.exists():
             _rprint(f"  Removing old {self._install_dir}...")
@@ -1343,8 +1358,24 @@ class Transcriber:
         prompt: str = "",
         timeout: int = 120,
     ) -> None:
-        self._cli = whisper_cli
-        self._model = model_path
+        # Validate whisper CLI path
+        cli_path = Path(whisper_cli).resolve()
+        if not cli_path.exists():
+            raise RedictumError(f"Whisper CLI not found: {cli_path}")
+        if not cli_path.is_file():
+            raise RedictumError(f"Whisper CLI is not a file: {cli_path}")
+        if not os.access(cli_path, os.X_OK):
+            raise RedictumError(f"Whisper CLI is not executable: {cli_path}")
+        
+        # Validate model path
+        model_path_resolved = Path(model_path).resolve()
+        if not model_path_resolved.exists():
+            raise RedictumError(f"Whisper model not found: {model_path_resolved}")
+        if not model_path_resolved.is_file():
+            raise RedictumError(f"Whisper model is not a file: {model_path_resolved}")
+        
+        self._cli = str(cli_path)
+        self._model = str(model_path_resolved)
         self._language = language
         self._prompt = prompt
         self._timeout = timeout
