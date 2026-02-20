@@ -1884,7 +1884,8 @@ class RedictumApp:
         diag.run_stage2()
         diag.check_whisper()
         self._mark_initialized()
-        return config
+        # Reload config — check_whisper() may have updated paths on disk
+        return self._config_mgr.load()
 
     def init_quick(self) -> dict[str, Any]:
         """Load config and ensure directories without running diagnostics.
