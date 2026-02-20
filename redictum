@@ -1372,9 +1372,9 @@ class Transcriber:
         if cli_path_unresolved.is_symlink():
             cli_path = cli_path_unresolved.resolve()
             # Ensure the symlink doesn't point outside expected directories
-            # (should be in user's home directory or system paths like /usr)
+            # (should be in user's home directory or system paths like /usr, /opt, /var)
             home_dir = Path.home()
-            allowed_prefixes = (home_dir, Path("/usr"), Path("/opt"))
+            allowed_prefixes = (home_dir, Path("/usr"), Path("/opt"), Path("/var"))
             if not any(cli_path.is_relative_to(prefix) for prefix in allowed_prefixes):
                 raise RedictumError(
                     f"Whisper CLI symlink points to unexpected location: {cli_path}"
