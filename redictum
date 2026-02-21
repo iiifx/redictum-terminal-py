@@ -1248,11 +1248,13 @@ class AudioRecorder:
         except subprocess.TimeoutExpired:
             self._process.kill()
             self._process.wait()
+            logging.warning("arecord did not stop gracefully, killed")
         self._process = None
 
         path = self._current_file
         self._current_file = None
         if path is None or not path.exists() or path.stat().st_size == 0:
+            logging.warning("Recording file empty or missing: %s", path)
             if path and path.exists():
                 path.unlink()
             return None
@@ -1383,6 +1385,10 @@ class Transcriber:
         if not translate and self._prompt:
             cmd.extend(["--prompt", self._prompt])
 
+        logging.info(
+            "Transcribing: %s (translate: %s)", audio_path.name, translate,
+        )
+
         try:
             result = subprocess.run(
                 cmd,
@@ -1404,6 +1410,7 @@ class Transcriber:
         text = result.stdout.strip()
         # Filter blank audio artifacts
         if not text or text in self.BLANK_MARKERS:
+            logging.info("Whisper returned blank/empty output")
             return ""
         return text
 
@@ -1427,21 +1434,25 @@ class ClipboardManager:
 
     def copy(self, text: str) -> None:
         """Copy text to the system clipboard via xclip."""
-        subprocess.run(
+        result = subprocess.run(
             ["xclip", "-selection", "clipboard"],
             input=text.encode("utf-8"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        if result.returncode != 0:
+            logging.warning("xclip copy failed (code %d)", result.returncode)
 
     def paste(self) -> None:
         """Simulate Ctrl+V to paste from clipboard."""
         time.sleep(0.05)
-        subprocess.run(
+        result = subprocess.run(
             ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        if result.returncode != 0:
+            logging.warning("xdotool paste failed (code %d)", result.returncode)
 
     def save(self) -> tuple[str, bytes] | None:
         """Save current clipboard contents (target type + raw data).
@@ -1460,9 +1471,11 @@ class ClipboardManager:
                 timeout=5,
             )
             if result.returncode != 0 or not result.stdout:
+                logging.warning("Clipboard save failed: xclip returned %d", result.returncode)
                 return None
             return (target, result.stdout)
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            logging.warning("Clipboard save failed: %s", exc)
             return None
 
     def restore(self, snapshot: tuple[str, bytes]) -> None:
@@ -1480,8 +1493,8 @@ class ClipboardManager:
                 stderr=subprocess.DEVNULL,
                 timeout=5,
             )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            logging.warning("Clipboard restore failed: %s", exc)
 
     def _detect_target(self) -> str | None:
         """Detect the best clipboard target to save.
@@ -1523,6 +1536,7 @@ class SoundNotifier:
         self._volume = max(0, min(100, volume))
         self._temp_dir: Path | None = None
         self._sounds: dict[str, Path] = {}
+        self._warned_no_paplay = False
 
     def play_start(self) -> None:
         """Play the 'recording started' tone."""
@@ -1568,7 +1582,9 @@ class SoundNotifier:
                 stderr=subprocess.DEVNULL,
             )
         except FileNotFoundError:
-            pass
+            if not self._warned_no_paplay:
+                logging.warning("paplay not found, sound notifications disabled")
+                self._warned_no_paplay = True
 
     def _write_wav(self, filename: str, samples: list[float]) -> Path:
         peak = max(abs(s) for s in samples) or 1.0
@@ -2150,7 +2166,7 @@ class RedictumApp:
                         logging.info("Transcription returned empty text")
                         return
 
-                    logging.info("Transcribed (mode: %s): %r", captured_mode, text)
+                    logging.info("Transcribed (mode: %s): %d chars", captured_mode, len(text))
 
                     # Apply prefix/postfix
                     prefix = clip_cfg.get("prefix", "")

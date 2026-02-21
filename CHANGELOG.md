@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Use `sys.executable -m pip` instead of bare `pip` for correct environment
 - Replace `bash -c` with list-based subprocess calls in CUDA installer (security)
 - Use secure temp files (mkstemp) with guaranteed cleanup in CUDA and whisper installers
+- Stop logging transcribed text to file (privacy); log character count instead
+- Add missing logging to Transcriber, AudioRecorder, ClipboardManager, SoundNotifier
 
 ## [1.0.0] - 2026-02-20
 
