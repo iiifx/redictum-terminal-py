@@ -70,6 +70,13 @@ PIP_PACKAGES: dict[str, str] = {
     "yaml": "PyYAML",
 }
 
+# Fallback: pip package → apt package (for PEP 668 systems)
+PIP_APT_FALLBACK: dict[str, str] = {
+    "pynput": "python3-pynput",
+    "PyYAML": "python3-yaml",
+    "rich": "python3-rich",
+}
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "dependency": {
         "whisper": {
@@ -545,11 +552,60 @@ class Diagnostics:
         return result.returncode == 0
 
     def _install_pip(self, packages: list[str]) -> bool:
-        """Run pip install for the given packages. Return success."""
+        """Install Python packages with PEP 668 fallback chain.
+
+        Strategy:
+        1. Try ``pip install`` (works on older systems and in containers).
+        2. If blocked by PEP 668, try ``apt install python3-*`` equivalents.
+        3. If apt unavailable/failed, try ``pip install --break-system-packages``.
+        4. If everything fails, print manual instructions.
+        """
+        # 1. Try normal pip install
         cmd = [sys.executable, "-m", "pip", "install", *packages]
         _rprint(f"[dim]Running: {' '.join(cmd)}[/dim]")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            return True
+
+        # Check if this is PEP 668 block
+        if "externally-managed" not in result.stderr.lower():
+            # Some other error — show it
+            if result.stderr:
+                _rprint(f"[red]{result.stderr.strip()}[/red]")
+            return False
+
+        _rprint("[yellow]System Python is externally managed (PEP 668).[/yellow]")
+
+        # 2. Try apt equivalents
+        apt_packages = [
+            PIP_APT_FALLBACK[p]
+            for p in packages
+            if p in PIP_APT_FALLBACK
+        ]
+        if apt_packages and self._has_apt():
+            _rprint(f"[dim]Trying apt: {' '.join(apt_packages)}[/dim]")
+            if self._install_apt(apt_packages):
+                return True
+
+        # 3. Try pip with --break-system-packages
+        cmd = [
+            sys.executable, "-m", "pip", "install",
+            "--break-system-packages", *packages,
+        ]
+        _rprint(f"[dim]Running: {' '.join(cmd)}[/dim]")
         result = subprocess.run(cmd)
-        return result.returncode == 0
+        if result.returncode == 0:
+            return True
+
+        # 4. All failed — manual instructions
+        _rprint(
+            "[red]Could not install Python packages automatically.[/red]\n"
+            "Try one of:\n"
+            f"  sudo apt install {' '.join(apt_packages)}\n"
+            f"  pip install --user {' '.join(packages)}\n"
+            f"  pip install --break-system-packages {' '.join(packages)}"
+        )
+        return False
 
     def _has_apt(self) -> bool:
         """Check if apt is available (Debian/Ubuntu/Mint)."""
