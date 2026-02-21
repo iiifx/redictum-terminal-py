@@ -2107,6 +2107,7 @@ class RedictumApp:
 
         self._print_banner(ready=ready)
         logging.info("Interactive mode started (PID %d)", os.getpid())
+        logging.info("Starting main loop...")
         self._main_loop(stop_event)
         logging.info("Interactive mode stopped.")
         return EXIT_OK
@@ -2406,6 +2407,12 @@ def main() -> int:
             return app.run_whisper()
     except RedictumError as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    except KeyboardInterrupt:
+        return EXIT_OK
+    except Exception:
+        logging.exception("Fatal error")
+        _rprint("[red]Fatal error. Check logs for details.[/red]")
         return EXIT_ERROR
 
     return EXIT_OK
