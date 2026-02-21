@@ -2345,8 +2345,11 @@ class RedictumApp:
                     postfix = clip_cfg.get("postfix", "")
                     final_text = f"{prefix}{text}{postfix}"
 
-                    # Log transcript
-                    _log_transcript(transcripts_dir, final_text)
+                    # Log transcript (must not block paste on failure)
+                    try:
+                        _log_transcript(transcripts_dir, final_text)
+                    except OSError:
+                        logging.exception("Failed to write transcript log")
 
                     # Clipboard: save → copy → paste → restore
                     if clip_cfg.get("auto", True):

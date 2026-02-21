@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Prevent transcript log failure from blocking clipboard paste (catch OSError separately)
 - Auto-detect working audio device on first run (`device: "auto"`) instead of hardcoding `pulse`
 - Add timeout to clipboard copy/paste to prevent hanging when X11 session is lost
 - Play error tone on empty recording instead of silent failure; log `arecord` exit code for diagnostics
