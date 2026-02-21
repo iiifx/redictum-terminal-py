@@ -1315,6 +1315,8 @@ class AudioRecorder:
             self._process.kill()
             self._process.wait()
             logging.warning("arecord did not stop gracefully, killed")
+        if self._process.returncode != 0:
+            logging.error("arecord exited with code %d", self._process.returncode)
         self._process = None
 
         path = self._current_file
@@ -2253,6 +2255,8 @@ class RedictumApp:
                         notifier.play_processing()
                     if audio_path is None:
                         logging.warning("Recording produced no audio")
+                        if sound_cfg.get("signal_error", True):
+                            notifier.play_error()
                         return
 
                     # Normalize
