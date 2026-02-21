@@ -1992,13 +1992,21 @@ class RedictumApp:
 
         _rprint("\nPress Ctrl+C to stop.")
 
+    def _show_config_hint(self) -> None:
+        """Show config file location and examples after first run."""
+        _rprint(f"\n[bold]Configuration:[/bold] {self._config_mgr.path}")
+        _rprint("  Examples:")
+        _rprint('    \u2022 Change hotkey:   [cyan]key: "F12"[/cyan]          (default: Insert)')
+        _rprint('    \u2022 Change language: [cyan]language: "en"[/cyan]      (default: auto)')
+
     def run_interactive(self) -> int:
         """Run in interactive (foreground) mode.
 
         Returns:
             Exit code.
         """
-        if self._is_initialized():
+        first_run = not self._is_initialized()
+        if not first_run:
             self._config = self.init_quick()
             if self._deps_ok(self._config):
                 ready = False
@@ -2008,6 +2016,9 @@ class RedictumApp:
         else:
             self._config = self.init()
             ready = True
+
+        if first_run:
+            self._show_config_hint()
 
         setup_logging(self._log_path)
 
@@ -2031,12 +2042,16 @@ class RedictumApp:
         Returns:
             Exit code.
         """
-        if self._is_initialized():
+        first_run = not self._is_initialized()
+        if not first_run:
             self._config = self.init_quick()
             if not self._deps_ok(self._config):
                 self._config = self.init()
         else:
             self._config = self.init()
+
+        if first_run:
+            self._show_config_hint()
 
         daemon = Daemon(self._pid_path, self._log_path)
         _rprint("[bold]Redictum Terminal — daemon started.[/bold]")
