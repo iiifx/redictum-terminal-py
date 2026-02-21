@@ -89,7 +89,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "audio": {
         "recording": {
-            "device": "pulse",
+            "device": "auto",
             "normalize": True,
         },
     },
@@ -157,8 +157,8 @@ dependency:
 
 audio:
   recording:
-    # ALSA recording device ("pulse" for PulseAudio)
-    device: "pulse"
+    # ALSA recording device ("auto" = detect, or "pulse", "default", etc.)
+    device: "auto"
 
     # Normalize audio via ffmpeg loudnorm before transcription
     normalize: true
@@ -425,6 +425,7 @@ class Diagnostics:
         self._check_linux()
         self._check_pulseaudio()
         self._check_alsa()
+        self._detect_audio_device()
         self._check_x11()
 
     def _check_python(self) -> None:
@@ -466,6 +467,52 @@ class Diagnostics:
                 "ALSA (arecord) is required but not found.\n"
                 "Install it manually: sudo apt install alsa-utils"
             )
+
+    def _detect_audio_device(self) -> None:
+        """Auto-detect a working ALSA recording device if config says 'auto'."""
+        device = self._config.get("audio", {}).get("recording", {}).get("device", "auto")
+        if device != "auto":
+            _rprint(f"  [green]\u2713[/green] Audio device: {device} (manual)")
+            return
+
+        candidates = ["pulse", "default"]
+        for candidate in candidates:
+            if self._test_audio_device(candidate):
+                _rprint(f"  [green]\u2713[/green] Audio device: {candidate} (auto-detected)")
+                self._config_mgr.update({"device": candidate})
+                self._config["audio"]["recording"]["device"] = candidate
+                return
+
+        _rprint("  [red]\u2717[/red] Audio device \u2014 no working device found")
+        raise RedictumError(
+            "No working audio recording device found.\n"
+            "Tried: " + ", ".join(candidates) + "\n"
+            "Check: pactl info (PulseAudio), arecord -l (ALSA devices)\n"
+            "Config: audio.recording.device in config.yaml"
+        )
+
+    @staticmethod
+    def _test_audio_device(device: str) -> bool:
+        """Test if arecord can open the given device (1-second recording)."""
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            result = subprocess.run(
+                [
+                    "arecord", "-D", device,
+                    "-f", "S16_LE", "-r", "16000", "-c", "1",
+                    "-d", "1", "-t", "wav", path,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return False
+        finally:
+            Path(path).unlink(missing_ok=True)
 
     def _check_x11(self) -> None:
         if os.environ.get("DISPLAY"):
@@ -2033,6 +2080,10 @@ class RedictumApp:
         if not shutil.which("arecord"):
             return False
         if not os.environ.get("DISPLAY"):
+            return False
+        # Audio device must be resolved (not "auto")
+        device = config.get("audio", {}).get("recording", {}).get("device", "auto")
+        if device == "auto":
             return False
         # Stage 2: apt packages (runtime only, build tools skipped)
         for name in APT_PACKAGES:

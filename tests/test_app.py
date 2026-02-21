@@ -60,6 +60,11 @@ class TestDepsOk:
                     "model": str(model),
                 },
             },
+            "audio": {
+                "recording": {
+                    "device": "pulse",
+                },
+            },
         }
         assert app._deps_ok(config) is True
 
