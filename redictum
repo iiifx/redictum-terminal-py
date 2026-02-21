@@ -45,8 +45,8 @@ INITIALIZED_FILENAME = ".initialized"
 STOP_TIMEOUT = 3.0
 
 PATH_KEYS: tuple[tuple[str, ...], ...] = (
-    ("dependency", "whisper", "cli"),
-    ("dependency", "whisper", "model"),
+    ("dependency", "whisper_cli"),
+    ("dependency", "whisper_model"),
 )
 REQUIRED_DIRS = ("audio", "transcripts", "logs")
 
@@ -67,162 +67,138 @@ APT_BUILD_PACKAGES: dict[str, str] = {
 PIP_PACKAGES: dict[str, str] = {
     "pynput": "pynput",
     "rich": "rich",
-    "yaml": "PyYAML",
 }
 
 # Fallback: pip package → apt package (for PEP 668 systems)
 PIP_APT_FALLBACK: dict[str, str] = {
     "pynput": "python3-pynput",
-    "PyYAML": "python3-yaml",
     "rich": "python3-rich",
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "dependency": {
-        "whisper": {
-            "cli": "~/whisper.cpp/build/bin/whisper-cli",
-            "model": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin",
-            "language": "auto",
-            "prompt": "Proper conversational speech with correct punctuation: commas, periods, question marks and exclamation marks. Anglicisms, technical terms and abbreviations are used.",
-            "timeout": 120,
-        },
+        "whisper_cli": "~/whisper.cpp/build/bin/whisper-cli",
+        "whisper_model": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin",
+        "whisper_language": "auto",
+        "whisper_prompt": "Proper conversational speech with correct punctuation: commas, periods, question marks and exclamation marks. Anglicisms, technical terms and abbreviations are used.",
+        "whisper_timeout": 120,
     },
     "audio": {
-        "recording": {
-            "device": "auto",
-            "normalize": True,
-        },
+        "recording_device": "auto",
+        "recording_normalize": True,
     },
     "input": {
-        "hotkey": {
-            "key": "Insert",
-            "hold_delay": 0.6,
-            "translate_key": "ctrl+Insert",
-        },
+        "hotkey_key": "Insert",
+        "hotkey_hold_delay": 0.6,
+        "hotkey_translate_key": "ctrl+Insert",
     },
     "clipboard": {
-        "paste": {
-            "auto": True,
-            "prefix": "",
-            "postfix": " ",
-        },
+        "paste_auto": True,
+        "paste_prefix": "",
+        "paste_postfix": " ",
     },
     "notification": {
-        "sound": {
-            "signal_volume": 30,
-            "signal_start": True,
-            "signal_processing": False,
-            "signal_done": True,
-            "signal_error": True,
-        },
+        "sound_signal_volume": 30,
+        "sound_signal_start": True,
+        "sound_signal_processing": False,
+        "sound_signal_done": True,
+        "sound_signal_error": True,
     },
     "storage": {
-        "audio": {
-            "max_files": 50,
-        },
-        "transcripts": {
-            "max_files": 50,
-        },
+        "audio_max_files": 50,
+        "transcripts_max_files": 50,
+        "logs_max_files": 50,
     },
 }
 
-DEFAULT_CONFIG_YAML: str = """\
+DEFAULT_CONFIG_INI: str = """\
 # =============================================================================
 # Redictum Terminal — Configuration
 # =============================================================================
 
 # --- External Dependencies ---------------------------------------------------
 
-dependency:
-  whisper:
-    # Path to whisper-cli binary
-    cli: "~/whisper.cpp/build/bin/whisper-cli"
+[dependency]
+# Path to whisper-cli binary
+whisper_cli = "~/whisper.cpp/build/bin/whisper-cli"
 
-    # Path to whisper model file
-    model: "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin"
+# Path to whisper model file
+whisper_model = "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin"
 
-    # Language for transcription: "auto" detects from system locale,
-    # or set explicitly (e.g., "ru", "en", "uk", "de", "fr")
-    language: "auto"
+# Language for transcription: "auto" detects from system locale,
+# or set explicitly: "en", "ru", "uk", "de", "fr"
+whisper_language = "auto"
 
-    # Optional prompt to guide whisper transcription
-    # Helps with domain-specific vocabulary and punctuation
-    prompt: "Proper conversational speech with correct punctuation: commas, periods, question marks and exclamation marks. Anglicisms, technical terms and abbreviations are used."
+# Optional prompt to guide whisper transcription (empty = "" or leave blank)
+# Helps with domain-specific vocabulary and punctuation
+whisper_prompt = "Proper conversational speech with correct punctuation: commas, periods, question marks and exclamation marks. Anglicisms, technical terms and abbreviations are used."
 
-    # Maximum time (seconds) to wait for transcription to finish
-    timeout: 120
-
+# Maximum time (seconds) to wait for transcription to finish
+whisper_timeout = 120
 
 # --- Audio Recording ---------------------------------------------------------
 
-audio:
-  recording:
-    # ALSA recording device ("auto" = detect, or "pulse", "default", etc.)
-    device: "auto"
+[audio]
+# ALSA recording device ("auto" = detect, or "pulse", "default", etc.)
+recording_device = "auto"
 
-    # Normalize audio via ffmpeg loudnorm before transcription
-    normalize: true
+# Normalize audio via ffmpeg loudnorm before transcription
+recording_normalize = true
 
 # --- Input -------------------------------------------------------------------
 
-input:
-  hotkey:
-    # Push-to-talk key name (e.g., "Insert", "F12", "Pause", "scroll_lock")
-    key: "Insert"
+[input]
+# Hold this key to record voice (e.g., "Insert", "F12", "Pause", "scroll_lock")
+hotkey_key = "Insert"
 
-    # How long (seconds) to hold the key before recording starts
-    hold_delay: 0.6
+# Minimum hold time (seconds) to start recording
+hotkey_hold_delay = 0.6
 
-    # Hotkey for translate mode (transcribe + translate to English)
-    # Format: "ctrl+Insert", "alt+F12", or empty string to disable
-    translate_key: "ctrl+Insert"
+# Hold this key combo to record + translate to English
+# Format: "ctrl+Insert", "alt+F12", or "" to disable
+hotkey_translate_key = "ctrl+Insert"
 
 # --- Clipboard ---------------------------------------------------------------
 
-clipboard:
-  paste:
-    # Auto-paste transcribed text via xdotool (Ctrl+V)
-    auto: true
+[clipboard]
+# Automatically paste transcribed text via xdotool (Ctrl+V)
+paste_auto = true
 
-    # Text added before transcription result
-    prefix: ""
+# Text to prepend before transcription result (use quotes for whitespace)
+paste_prefix = ""
 
-    # Text added after transcription result
-    postfix: " "
+# Text to append after transcription result (use quotes for whitespace)
+paste_postfix = " "
 
 # --- Notifications -----------------------------------------------------------
 
-notification:
-  sound:
-    # Sound volume (0-100, mapped to PulseAudio range)
-    signal_volume: 30
+[notification]
+# Volume level (0-100) for notification sounds
+sound_signal_volume = 30
 
-    # Sound when recording starts
-    signal_start: true
+# Play tone when recording starts
+sound_signal_start = true
 
-    # Sound when transcription begins
-    signal_processing: false
+# Play tone during processing
+sound_signal_processing = false
 
-    # Sound when transcription is done
-    signal_done: true
+# Play tone when transcription is done
+sound_signal_done = true
 
-    # Sound on error
-    signal_error: true
+# Play tone on error
+sound_signal_error = true
 
 # --- Storage -----------------------------------------------------------------
 
-storage:
-  audio:
-    # Maximum number of audio files to keep (oldest are deleted)
-    max_files: 50
+[storage]
+# Maximum number of audio files to keep (oldest are deleted)
+audio_max_files = 50
 
-  transcripts:
-    # Maximum number of daily transcript files to keep (oldest are deleted)
-    max_files: 50
+# Maximum number of daily transcript files to keep (oldest are deleted)
+transcripts_max_files = 50
 
-  logs:
-    # Maximum number of session log files to keep (oldest are deleted)
-    max_files: 50
+# Maximum number of session log files to keep (oldest are deleted)
+logs_max_files = 50
 """
 
 
@@ -260,15 +236,38 @@ def _confirm(prompt: str, default: bool = False) -> bool:
 # ---------------------------------------------------------------------------
 
 class ConfigManager:
-    """Manages config.yaml: generation, loading, merging with defaults.
+    """Manages config.ini: generation, loading, merging with defaults.
 
-    Config file lives next to the script. Missing keys are filled from
+    Config file lives next to the script.  Missing keys are filled from
     DEFAULT_CONFIG; extra keys in the user file are preserved.
-    Comments in YAML are preserved across updates.
+    Comments are preserved across updates (regex-based line replacement).
+
+    If an old ``config.yaml`` is detected, it is migrated automatically.
     """
 
+    # Types that should be parsed from INI string values.
+    _BOOL_KEYS: frozenset[str] = frozenset({
+        "recording_normalize",
+        "paste_auto",
+        "sound_signal_start",
+        "sound_signal_processing",
+        "sound_signal_done",
+        "sound_signal_error",
+    })
+    _INT_KEYS: frozenset[str] = frozenset({
+        "whisper_timeout",
+        "sound_signal_volume",
+        "audio_max_files",
+        "transcripts_max_files",
+        "logs_max_files",
+    })
+    _FLOAT_KEYS: frozenset[str] = frozenset({
+        "hotkey_hold_delay",
+    })
+
     def __init__(self, script_dir: Path) -> None:
-        self._path = script_dir / "config.yaml"
+        self._path = script_dir / "config.ini"
+        self._yaml_path = script_dir / "config.yaml"
 
     @property
     def path(self) -> Path:
@@ -279,52 +278,60 @@ class ConfigManager:
         """Load config from disk or generate a default one.
 
         Returns:
-            Merged configuration dictionary (nested).
+            Merged configuration dictionary (2-level: section → key → value).
 
         Raises:
-            RedictumError: If config.yaml exists but contains invalid YAML.
+            RedictumError: If config.ini exists but cannot be parsed.
         """
+        # Migrate from YAML if needed
+        if not self._path.exists() and self._yaml_path.exists():
+            self._migrate_yaml()
+
         if not self._path.exists():
             self._write_default()
             return self._expand_paths(self._deep_copy(DEFAULT_CONFIG))
 
-        import yaml  # late import: available after diagnostics installs PyYAML
+        import configparser
 
+        cp = configparser.ConfigParser(interpolation=None)
         try:
-            raw = self._path.read_text(encoding="utf-8")
-            user_config = yaml.safe_load(raw)
-        except yaml.YAMLError as exc:
+            cp.read(str(self._path), encoding="utf-8")
+        except configparser.Error as exc:
             raise RedictumError(
-                f"Invalid YAML in {self._path}: {exc}"
+                f"Invalid INI in {self._path}: {exc}"
             ) from exc
 
-        if not isinstance(user_config, dict):
-            user_config = {}
+        # Convert configparser sections into a 2-level dict
+        user_config: dict[str, Any] = {}
+        for section in cp.sections():
+            user_config[section] = {}
+            for key, raw_value in cp.items(section):
+                user_config[section][key] = self._parse_value(key, raw_value)
 
         merged = self._deep_copy(DEFAULT_CONFIG)
         self._deep_merge(merged, user_config)
         return self._expand_paths(merged)
 
     def update(self, updates: dict[str, str]) -> None:
-        """Update leaf keys in config.yaml, preserving comments.
+        """Update leaf keys in config.ini, preserving comments.
 
-        Performs line-by-line value replacement so that the YAML template
-        structure and comments remain intact.  Leaf key names must be
-        unique across the entire config.
+        Performs line-by-line value replacement so that the INI template
+        structure and comments remain intact.  Key names must be unique
+        across the entire config.
 
         Args:
-            updates: ``{leaf_key: value}`` pairs, e.g. ``{"cli": "/path"}``.
+            updates: ``{key: value}`` pairs, e.g. ``{"whisper_cli": "/path"}``.
         """
         if self._path.exists():
             text = self._path.read_text(encoding="utf-8")
         else:
-            text = DEFAULT_CONFIG_YAML
+            text = DEFAULT_CONFIG_INI
 
         for key, value in updates.items():
-            yaml_val = self._format_value(value)
+            ini_val = self._format_value(value)
             text = re.sub(
-                rf"^(\s*{re.escape(key)}:)\s+.*$",
-                rf"\1 {yaml_val}",
+                rf"^({re.escape(key)}\s*=)\s*.*$",
+                rf"\1 {ini_val}",
                 text,
                 count=1,
                 flags=re.MULTILINE,
@@ -332,15 +339,107 @@ class ConfigManager:
 
         self._path.write_text(text, encoding="utf-8")
 
+    # -- migration -----------------------------------------------------------
+
+    def _migrate_yaml(self) -> None:
+        """Migrate config.yaml → config.ini, rename yaml to .yaml.bak."""
+        try:
+            import yaml
+        except ImportError:
+            # PyYAML not available — can't read old config, skip migration
+            return
+
+        try:
+            raw = self._yaml_path.read_text(encoding="utf-8")
+            data = yaml.safe_load(raw)
+        except Exception:
+            # Can't parse old config — skip migration, start fresh
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        # Flatten 3-level YAML → 2-level INI key mapping
+        yaml_to_ini: dict[str, tuple[str, str]] = {
+            # (yaml path) → (ini_section, ini_key)
+        }
+        for section, sub in DEFAULT_CONFIG.items():
+            if isinstance(sub, dict):
+                for ini_key in sub:
+                    # Reverse-engineer YAML path from INI key
+                    # e.g. "whisper_cli" → ("dependency","whisper","cli")
+                    parts = ini_key.split("_", 1)
+                    if len(parts) == 2:
+                        yaml_to_ini[f"{section}.{parts[0]}.{parts[1]}"] = (section, ini_key)
+
+        # Write INI template, then override with user values
+        text = DEFAULT_CONFIG_INI
+        updates: dict[str, str] = {}
+
+        for section, sub in data.items():
+            if not isinstance(sub, dict):
+                continue
+            for group, values in sub.items():
+                if isinstance(values, dict):
+                    for key, value in values.items():
+                        path = f"{section}.{group}.{key}"
+                        if path in yaml_to_ini:
+                            _sec, ini_key = yaml_to_ini[path]
+                            updates[ini_key] = value
+
+        for key, value in updates.items():
+            ini_val = self._format_value(value)
+            text = re.sub(
+                rf"^({re.escape(key)}\s*=)\s*.*$",
+                rf"\1 {ini_val}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+
+        self._path.write_text(text, encoding="utf-8")
+        self._yaml_path.rename(self._yaml_path.with_suffix(".yaml.bak"))
+        logging.info("Migrated config.yaml → config.ini")
+
     # -- private helpers -----------------------------------------------------
 
     def _write_default(self) -> None:
-        """Write DEFAULT_CONFIG_YAML template with comments."""
-        self._path.write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")
+        """Write DEFAULT_CONFIG_INI template with comments."""
+        self._path.write_text(DEFAULT_CONFIG_INI, encoding="utf-8")
+
+    @classmethod
+    def _parse_value(cls, key: str, raw: str) -> Any:
+        """Parse a raw INI string value into the appropriate Python type."""
+        value = cls._strip_quotes(raw)
+        if key in cls._BOOL_KEYS:
+            return value.lower() in ("true", "yes", "1", "on")
+        if key in cls._INT_KEYS:
+            try:
+                return int(value)
+            except ValueError:
+                return value
+        if key in cls._FLOAT_KEYS:
+            try:
+                return float(value)
+            except ValueError:
+                return value
+        return value
+
+    @staticmethod
+    def _strip_quotes(value: str) -> str:
+        """Strip surrounding double quotes from a string value.
+
+        Paired quotes are removed:  "hello" → hello, "" → empty string.
+        Unpaired or escaped quotes are left as-is.
+        """
+        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+            if not value.endswith('\\"'):
+                return value[1:-1]
+        return value
 
     @staticmethod
     def _format_value(value: Any) -> str:
-        """Format a Python value for YAML output."""
+        """Format a Python value for INI output."""
         if isinstance(value, bool):
             return "true" if value else "false"
         if isinstance(value, str):
@@ -366,7 +465,7 @@ class ConfigManager:
 
     @staticmethod
     def _expand_paths(config: dict[str, Any]) -> dict[str, Any]:
-        """Expand ``~`` in path-valued keys (nested paths)."""
+        """Expand ``~`` in path-valued keys."""
         for path_keys in PATH_KEYS:
             node: Any = config
             for part in path_keys[:-1]:
@@ -470,7 +569,7 @@ class Diagnostics:
 
     def _detect_audio_device(self) -> None:
         """Auto-detect a working ALSA recording device if config says 'auto'."""
-        device = self._config.get("audio", {}).get("recording", {}).get("device", "auto")
+        device = self._config.get("audio", {}).get("recording_device", "auto")
         if device != "auto":
             _rprint(f"  [green]\u2713[/green] Audio device: {device} (manual)")
             return
@@ -479,8 +578,8 @@ class Diagnostics:
         for candidate in candidates:
             if self._test_audio_device(candidate):
                 _rprint(f"  [green]\u2713[/green] Audio device: {candidate} (auto-detected)")
-                self._config_mgr.update({"device": candidate})
-                self._config["audio"]["recording"]["device"] = candidate
+                self._config_mgr.update({"recording_device": candidate})
+                self._config["audio"]["recording_device"] = candidate
                 return
 
         _rprint("  [red]\u2717[/red] Audio device \u2014 no working device found")
@@ -488,7 +587,7 @@ class Diagnostics:
             "No working audio recording device found.\n"
             "Tried: " + ", ".join(candidates) + "\n"
             "Check: pactl info (PulseAudio), arecord -l (ALSA devices)\n"
-            "Config: audio.recording.device in config.yaml"
+            "Config: [audio] recording_device in config.ini"
         )
 
     @staticmethod
@@ -674,9 +773,9 @@ class Diagnostics:
 
     def check_whisper(self) -> None:
         """Check whisper.cpp and model, offer installation if missing."""
-        whisper = self._config.get("dependency", {}).get("whisper", {})
-        cli_path = whisper.get("cli", "")
-        model_path = whisper.get("model", "")
+        whisper = self._config.get("dependency", {})
+        cli_path = whisper.get("whisper_cli", "")
+        model_path = whisper.get("whisper_model", "")
         cli_ok = bool(cli_path) and Path(cli_path).exists()
         model_ok = bool(model_path) and Path(model_path).exists()
 
@@ -693,7 +792,12 @@ class Diagnostics:
         if cli_ok and model_ok:
             return
 
-        if _confirm("\nInstall whisper.cpp?", default=True):
+        if cli_ok and not model_ok:
+            prompt = "\nDownload whisper model?"
+        else:
+            prompt = "\nInstall whisper.cpp?"
+
+        if _confirm(prompt, default=True):
             installer = WhisperInstaller(self._config_mgr)
             installer.install()
         else:
@@ -1117,7 +1221,7 @@ class WhisperInstaller:
     def _ensure_model(self) -> Path:
         """Check if a model exists, offer download if not."""
         config = self._config_mgr.load()
-        model_path_str = config.get("dependency", {}).get("whisper", {}).get("model", "")
+        model_path_str = config.get("dependency", {}).get("whisper_model", "")
         if model_path_str and Path(model_path_str).exists():
             _rprint(f"  [green]\u2713[/green] Model: {Path(model_path_str).name}")
             return Path(model_path_str)
@@ -1126,7 +1230,7 @@ class WhisperInstaller:
     # -- Config --------------------------------------------------------------
 
     def _update_config(self, cli_path: Path, model_path: Path) -> None:
-        """Write whisper paths to config.yaml."""
+        """Write whisper paths to config.ini."""
         home = str(Path.home())
         cli_str = str(cli_path)
         model_str = str(model_path)
@@ -1135,8 +1239,8 @@ class WhisperInstaller:
         if model_str.startswith(home):
             model_str = "~" + model_str[len(home):]
         self._config_mgr.update({
-            "cli": cli_str,
-            "model": model_str,
+            "whisper_cli": cli_str,
+            "whisper_model": model_str,
         })
         _rprint("  [green]\u2713[/green] Config updated")
 
@@ -1945,9 +2049,9 @@ class Housekeeping:
         self._audio_dir = audio_dir
         self._transcripts_dir = transcripts_dir
         self._logs_dir = logs_dir
-        self._audio_max = storage_cfg.get("audio", {}).get("max_files", 50)
-        self._transcripts_max = storage_cfg.get("transcripts", {}).get("max_files", 50)
-        self._logs_max = storage_cfg.get("logs", {}).get("max_files", 50)
+        self._audio_max = storage_cfg.get("audio_max_files", 50)
+        self._transcripts_max = storage_cfg.get("transcripts_max_files", 50)
+        self._logs_max = storage_cfg.get("logs_max_files", 50)
 
     def rotate_audio(self) -> int:
         """Remove oldest audio files exceeding the limit.
@@ -2082,7 +2186,7 @@ class RedictumApp:
         if not os.environ.get("DISPLAY"):
             return False
         # Audio device must be resolved (not "auto")
-        device = config.get("audio", {}).get("recording", {}).get("device", "auto")
+        device = config.get("audio", {}).get("recording_device", "auto")
         if device == "auto":
             return False
         # Stage 2: apt packages (runtime only, build tools skipped)
@@ -2096,9 +2200,9 @@ class RedictumApp:
             except ImportError:
                 return False
         # whisper.cpp
-        whisper = config.get("dependency", {}).get("whisper", {})
-        cli_path = whisper.get("cli", "")
-        model_path = whisper.get("model", "")
+        dep = config.get("dependency", {})
+        cli_path = dep.get("whisper_cli", "")
+        model_path = dep.get("whisper_model", "")
         if not cli_path or not Path(cli_path).exists():
             return False
         if not model_path or not Path(model_path).exists():
@@ -2113,17 +2217,17 @@ class RedictumApp:
             _rprint("[bold]Redictum Terminal[/bold]")
 
         # Resolve hotkey names from config
-        hotkey_cfg = self._config.get("input", {}).get("hotkey", {})
-        key = hotkey_cfg.get("key", "Insert")
-        translate_key = hotkey_cfg.get("translate_key", "")
+        input_cfg = self._config.get("input", {})
+        key = input_cfg.get("hotkey_key", "Insert")
+        translate_key = input_cfg.get("hotkey_translate_key", "")
         parts = [f"{key} (transcribe)"]
         if translate_key:
             parts.append(f"{translate_key} (translate)")
         _rprint(f"Listening: {', '.join(parts)}")
 
         # Resolve language
-        whisper_cfg = self._config.get("dependency", {}).get("whisper", {})
-        language = whisper_cfg.get("language", "auto")
+        dep_cfg = self._config.get("dependency", {})
+        language = dep_cfg.get("whisper_language", "auto")
         if language == "auto":
             detected = _detect_language()
             _rprint(f"Language: {detected} (auto)")
@@ -2136,8 +2240,8 @@ class RedictumApp:
         """Show config file location and examples after first run."""
         _rprint(f"\n[bold]Configuration:[/bold] {self._config_mgr.path}")
         _rprint("  Examples:")
-        _rprint('    \u2022 Change hotkey:   [cyan]key: "F12"[/cyan]          (default: Insert)')
-        _rprint('    \u2022 Change language: [cyan]language: "en"[/cyan]      (default: auto)')
+        _rprint('    \u2022 Change hotkey:   [cyan]hotkey_key = "F12"[/cyan]          (default: Insert)')
+        _rprint('    \u2022 Change language: [cyan]whisper_language = "en"[/cyan]      (default: auto)')
 
     def run_interactive(self) -> int:
         """Run in interactive (foreground) mode.
@@ -2246,37 +2350,37 @@ class RedictumApp:
         audio_dir = self._script_dir / "audio"
         transcripts_dir = self._script_dir / "transcripts"
 
-        # Unpack nested config sections
-        whisper = cfg["dependency"]["whisper"]
-        audio = cfg["audio"]["recording"]
-        hotkey = cfg["input"]["hotkey"]
-        clip_cfg = cfg["clipboard"]["paste"]
-        sound_cfg = cfg["notification"]["sound"]
+        # Unpack config sections (2-level: section → key)
+        dep = cfg["dependency"]
+        audio_cfg = cfg["audio"]
+        input_cfg = cfg["input"]
+        clip_cfg = cfg["clipboard"]
+        sound_cfg = cfg["notification"]
         storage = cfg["storage"]
 
         # Resolve language: "auto" -> detect from system locale
-        language = whisper.get("language", "auto")
+        language = dep.get("whisper_language", "auto")
         if language == "auto":
             language = _detect_language()
             logging.info("Language auto-detected from locale: %r", language)
 
         # Build pipeline components
-        recorder = AudioRecorder(audio_dir, audio["device"])
+        recorder = AudioRecorder(audio_dir, audio_cfg["recording_device"])
         processor = AudioProcessor()
         transcriber = Transcriber(
-            whisper["cli"],
-            whisper["model"],
+            dep["whisper_cli"],
+            dep["whisper_model"],
             language,
-            prompt=whisper.get("prompt", ""),
-            timeout=whisper.get("timeout", 120),
+            prompt=dep.get("whisper_prompt", ""),
+            timeout=dep.get("whisper_timeout", 120),
         )
         clipboard = ClipboardManager()
-        notifier = SoundNotifier(volume=sound_cfg.get("signal_volume", 30))
+        notifier = SoundNotifier(volume=sound_cfg.get("sound_signal_volume", 30))
         logs_dir = self._log_path.parent
         housekeeper = Housekeeping(audio_dir, transcripts_dir, logs_dir, storage)
         listener = HotkeyListener(
-            hotkey["key"], hotkey["hold_delay"],
-            translate_key=hotkey.get("translate_key", ""),
+            input_cfg["hotkey_key"], input_cfg["hotkey_hold_delay"],
+            translate_key=input_cfg.get("hotkey_translate_key", ""),
         )
 
         state = STATE_IDLE
@@ -2298,7 +2402,7 @@ class RedictumApp:
                 logging.exception("Failed to start recording")
                 notifier.play_error()
                 return
-            if sound_cfg.get("signal_start", True):
+            if sound_cfg.get("sound_signal_start", True):
                 notifier.play_start()
             logging.info("Recording started (mode: %s)", mode)
 
@@ -2314,16 +2418,16 @@ class RedictumApp:
                 nonlocal state
                 try:
                     audio_path = recorder.stop()
-                    if sound_cfg.get("signal_processing", False):
+                    if sound_cfg.get("sound_signal_processing", False):
                         notifier.play_processing()
                     if audio_path is None:
                         logging.warning("Recording produced no audio")
-                        if sound_cfg.get("signal_error", True):
+                        if sound_cfg.get("sound_signal_error", True):
                             notifier.play_error()
                         return
 
                     # Normalize
-                    if audio.get("normalize", True):
+                    if audio_cfg.get("recording_normalize", True):
                         try:
                             audio_path = processor.normalize(audio_path)
                         except RedictumError:
@@ -2341,8 +2445,8 @@ class RedictumApp:
                     logging.info("Transcribed (mode: %s): %d chars", captured_mode, len(text))
 
                     # Apply prefix/postfix
-                    prefix = clip_cfg.get("prefix", "")
-                    postfix = clip_cfg.get("postfix", "")
+                    prefix = clip_cfg.get("paste_prefix", "")
+                    postfix = clip_cfg.get("paste_postfix", "")
                     final_text = f"{prefix}{text}{postfix}"
 
                     # Log transcript (must not block paste on failure)
@@ -2352,7 +2456,7 @@ class RedictumApp:
                         logging.exception("Failed to write transcript log")
 
                     # Clipboard: save → copy → paste → restore
-                    if clip_cfg.get("auto", True):
+                    if clip_cfg.get("paste_auto", True):
                         saved = clipboard.save()
                         clipboard.copy(final_text)
                         clipboard.paste()
@@ -2363,7 +2467,7 @@ class RedictumApp:
                     else:
                         clipboard.copy(final_text)
 
-                    if sound_cfg.get("signal_done", True):
+                    if sound_cfg.get("sound_signal_done", True):
                         notifier.play_stop()
                     housekeeper.rotate_audio()
                     housekeeper.rotate_transcripts()
@@ -2371,11 +2475,11 @@ class RedictumApp:
                     logging.info("Pipeline complete, state -> idle")
                 except RedictumError:
                     logging.exception("Pipeline error")
-                    if sound_cfg.get("signal_error", True):
+                    if sound_cfg.get("sound_signal_error", True):
                         notifier.play_error()
                 except Exception:
                     logging.exception("Unexpected pipeline error")
-                    if sound_cfg.get("signal_error", True):
+                    if sound_cfg.get("sound_signal_error", True):
                         notifier.play_error()
                 finally:
                     with state_lock:
@@ -2432,7 +2536,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         action="store_true",
-        help="Recreate config.yaml with default values",
+        help="Recreate config.ini with default values",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -2457,7 +2561,7 @@ def main() -> int:
     app = RedictumApp(script_dir)
 
     if args.config:
-        config_path = script_dir / "config.yaml"
+        config_path = script_dir / "config.ini"
         if config_path.exists():
             config_path.unlink()
         init_marker = script_dir / INITIALIZED_FILENAME

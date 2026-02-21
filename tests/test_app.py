@@ -55,15 +55,11 @@ class TestDepsOk:
 
         config = {
             "dependency": {
-                "whisper": {
-                    "cli": str(cli),
-                    "model": str(model),
-                },
+                "whisper_cli": str(cli),
+                "whisper_model": str(model),
             },
             "audio": {
-                "recording": {
-                    "device": "pulse",
-                },
+                "recording_device": "pulse",
             },
         }
         assert app._deps_ok(config) is True
@@ -72,7 +68,7 @@ class TestDepsOk:
         import sys
 
         monkeypatch.setattr(sys, "version_info", _VersionInfo(3, 8, 0, "final", 0))
-        config = {"dependency": {"whisper": {"cli": "", "model": ""}}}
+        config = {"dependency": {"whisper_cli": "", "whisper_model": ""}}
         assert app._deps_ok(config) is False
 
     def test_missing_whisper(self, app, monkeypatch):
@@ -89,10 +85,8 @@ class TestDepsOk:
         )
         config = {
             "dependency": {
-                "whisper": {
-                    "cli": "/nonexistent/path",
-                    "model": "/nonexistent/model",
-                },
+                "whisper_cli": "/nonexistent/path",
+                "whisper_model": "/nonexistent/model",
             },
         }
         assert app._deps_ok(config) is False

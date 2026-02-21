@@ -61,7 +61,7 @@ class TestRotateAudio:
         (audio_dir / "rec_00_norm.wav").write_text("x")
         (audio_dir / "rec_01_norm.wav").write_text("x")
 
-        hk = Housekeeping(audio_dir, transcripts_dir, logs_dir, {"audio": {"max_files": 2}})
+        hk = Housekeeping(audio_dir, transcripts_dir, logs_dir, {"audio_max_files": 2})
         removed = hk.rotate_audio()
         assert removed == 4
         # Only 2 newest files remain
@@ -85,7 +85,7 @@ class TestRotateTranscripts:
             (transcripts_dir / f"2025-01-{i+1:02d}.txt").write_text("x")
             time.sleep(0.01)
 
-        hk = Housekeeping(audio_dir, transcripts_dir, logs_dir, {"transcripts": {"max_files": 3}})
+        hk = Housekeeping(audio_dir, transcripts_dir, logs_dir, {"transcripts_max_files": 3})
         removed = hk.rotate_transcripts()
         assert removed == 2
         remaining = list(transcripts_dir.glob("*.txt"))
@@ -109,7 +109,7 @@ class TestRotateLogs:
             (logs_dir / f"redictum_20260220_{i:02d}0000.log").write_text("x")
             time.sleep(0.01)
 
-        hk = Housekeeping(audio_dir, transcripts_dir, logs_dir, {"logs": {"max_files": 2}})
+        hk = Housekeeping(audio_dir, transcripts_dir, logs_dir, {"logs_max_files": 2})
         removed = hk.rotate_logs()
         assert removed == 3
         remaining = list(logs_dir.glob("*.log"))

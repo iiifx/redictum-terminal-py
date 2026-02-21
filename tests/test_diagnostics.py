@@ -19,7 +19,7 @@ def make_diagnostics(tmp_path):
         from redictum import ConfigManager, Diagnostics
 
         if config is None:
-            config = {"dependency": {"whisper": {"cli": "", "model": ""}}}
+            config = {"dependency": {"whisper_cli": "", "whisper_model": ""}}
         mgr = ConfigManager(tmp_path)
         return Diagnostics(config, mgr)
 
@@ -200,7 +200,8 @@ class TestCheckWhisper:
         model.write_text("x")
         config = {
             "dependency": {
-                "whisper": {"cli": str(cli), "model": str(model)},
+                "whisper_cli": str(cli),
+                "whisper_model": str(model),
             },
         }
         diag = make_diagnostics(config)

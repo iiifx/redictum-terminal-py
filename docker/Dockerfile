@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir pynput rich PyYAML
+RUN pip3 install --no-cache-dir pynput rich
 
 WORKDIR /opt/redictum-test
 

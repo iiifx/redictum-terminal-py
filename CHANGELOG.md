@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Show "Download whisper model?" instead of "Install whisper.cpp?" when only model is missing
 - Prevent transcript log failure from blocking clipboard paste (catch OSError separately)
 - Auto-detect working audio device on first run (`device: "auto"`) instead of hardcoding `pulse`
 - Add timeout to clipboard copy/paste to prevent hanging when X11 session is lost
@@ -35,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Show config file path and examples after first run
 
 ### Changed
+- Migrate config from YAML to INI format (`config.yaml` → `config.ini`); removes PyYAML dependency
+- Config structure flattened to 2 levels: `[section]` + `group_key` (e.g., `[dependency] whisper_cli`)
+- All string values support optional double quotes (stripped automatically on read)
+- Existing `config.yaml` is auto-migrated to `config.ini` on first load (backup saved as `.yaml.bak`)
 - Confirmation prompts now show default value (`[Y/n]` or `[y/N]`); Enter accepts default
 
 ## [1.0.0] - 2026-02-20

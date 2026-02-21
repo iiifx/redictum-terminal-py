@@ -156,12 +156,12 @@ wait_for_daemon() {
     return 0
 }
 
-# After init(), config.yaml has default ~/whisper.cpp/... paths that don't
+# After init(), config.ini has default ~/whisper.cpp/... paths that don't
 # exist.  Sed them to our fakes so _deps_ok() returns True on next start.
 fix_whisper_config() {
-    sed -i 's|cli:.*|cli: "/usr/local/bin/whisper-cli"|' "$WORKDIR/config.yaml"
+    sed -i 's|whisper_cli = .*|whisper_cli = "/usr/local/bin/whisper-cli"|' "$WORKDIR/config.ini"
     touch "$WORKDIR/fake-model.bin"
-    sed -i 's|model:.*|model: "'$WORKDIR'/fake-model.bin"|' "$WORKDIR/config.yaml"
+    sed -i 's|whisper_model = .*|whisper_model = "'$WORKDIR'/fake-model.bin"|' "$WORKDIR/config.ini"
 }
 
 cleanup_test() {
@@ -178,7 +178,7 @@ cleanup_test() {
             done
         fi
     fi
-    rm -f "$WORKDIR/config.yaml" "$WORKDIR/.initialized" "$WORKDIR/redictum.pid"
+    rm -f "$WORKDIR/config.ini" "$WORKDIR/.initialized" "$WORKDIR/redictum.pid"
     rm -f "$WORKDIR/fake-model.bin"
     rm -rf "$WORKDIR/audio" "$WORKDIR/transcripts" "$WORKDIR/logs"
 }
@@ -209,7 +209,7 @@ test_01_clean_first_run() {
     wait_for_daemon || return 1
     fix_whisper_config
 
-    assert_file_exists "$WORKDIR/config.yaml" || return 1
+    assert_file_exists "$WORKDIR/config.ini" || return 1
     assert_file_exists "$WORKDIR/.initialized" || return 1
     assert_dir_exists "$WORKDIR/audio" || return 1
     assert_dir_exists "$WORKDIR/transcripts" || return 1
@@ -299,7 +299,7 @@ test_07_stale_pid() {
     assert_pid_alive "$pid" || return 1
 }
 
-# T08: --config resets config.yaml (fresh mtime)
+# T08: --config resets config.ini (fresh mtime)
 test_08_config_reset() {
     # First start to create initial files
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
@@ -312,10 +312,10 @@ test_08_config_reset() {
     wait_for_pid_gone "$pid" || return 1
 
     local old_mtime
-    old_mtime=$(stat -c %Y "$WORKDIR/config.yaml")
+    old_mtime=$(stat -c %Y "$WORKDIR/config.ini")
     sleep 1.1  # ensure different mtime (1-second resolution)
 
-    # --config deletes config.yaml + .initialized, then start recreates them
+    # --config deletes config.ini + .initialized, then start recreates them
     python3 "$SCRIPT" --config start </dev/null >/dev/null 2>&1
     local rc=$?
     assert_exit_ok $rc || return 1
@@ -323,9 +323,9 @@ test_08_config_reset() {
     fix_whisper_config
 
     local new_mtime
-    new_mtime=$(stat -c %Y "$WORKDIR/config.yaml")
+    new_mtime=$(stat -c %Y "$WORKDIR/config.ini")
     if [[ "$new_mtime" -le "$old_mtime" ]]; then
-        echo -e "  ${RED}FAIL${NC}: config.yaml not recreated (mtime unchanged)"
+        echo -e "  ${RED}FAIL${NC}: config.ini not recreated (mtime unchanged)"
         return 1
     fi
 }
