@@ -90,3 +90,87 @@ class TestDepsOk:
             },
         }
         assert app._deps_ok(config) is False
+
+
+class TestApplyOverrides:
+    """_apply_overrides: --set section.key=value CLI overrides."""
+
+    def test_string_override(self):
+        from redictum import _apply_overrides
+
+        config = {"dependency": {"whisper_language": "auto"}}
+        _apply_overrides(config, ["dependency.whisper_language=en"])
+        assert config["dependency"]["whisper_language"] == "en"
+
+    def test_int_override(self):
+        from redictum import _apply_overrides
+
+        config = {"dependency": {"whisper_timeout": 120}}
+        _apply_overrides(config, ["dependency.whisper_timeout=60"])
+        assert config["dependency"]["whisper_timeout"] == 60
+
+    def test_bool_override_true(self):
+        from redictum import _apply_overrides
+
+        config = {"audio": {"recording_normalize": False}}
+        _apply_overrides(config, ["audio.recording_normalize=true"])
+        assert config["audio"]["recording_normalize"] is True
+
+    def test_bool_override_false(self):
+        from redictum import _apply_overrides
+
+        config = {"audio": {"recording_normalize": True}}
+        _apply_overrides(config, ["audio.recording_normalize=off"])
+        assert config["audio"]["recording_normalize"] is False
+
+    def test_float_override(self):
+        from redictum import _apply_overrides
+
+        config = {"input": {"hotkey_hold_delay": 0.6}}
+        _apply_overrides(config, ["input.hotkey_hold_delay=0.3"])
+        assert config["input"]["hotkey_hold_delay"] == pytest.approx(0.3)
+
+    def test_quoted_string_stripped(self):
+        from redictum import _apply_overrides
+
+        config = {"dependency": {"whisper_language": "auto"}}
+        _apply_overrides(config, ['dependency.whisper_language="ru"'])
+        assert config["dependency"]["whisper_language"] == "ru"
+
+    def test_multiple_overrides(self):
+        from redictum import _apply_overrides
+
+        config = {
+            "dependency": {"whisper_language": "auto", "whisper_timeout": 120},
+        }
+        _apply_overrides(config, [
+            "dependency.whisper_language=en",
+            "dependency.whisper_timeout=30",
+        ])
+        assert config["dependency"]["whisper_language"] == "en"
+        assert config["dependency"]["whisper_timeout"] == 30
+
+    def test_missing_equals_raises(self):
+        from redictum import _apply_overrides, RedictumError
+
+        with pytest.raises(RedictumError, match="Invalid --set format"):
+            _apply_overrides({}, ["dependency.whisper_language"])
+
+    def test_unknown_section_raises(self):
+        from redictum import _apply_overrides, RedictumError
+
+        with pytest.raises(RedictumError, match="Unknown section"):
+            _apply_overrides({}, ["nonexistent.key=val"])
+
+    def test_unknown_key_raises(self):
+        from redictum import _apply_overrides, RedictumError
+
+        with pytest.raises(RedictumError, match="Unknown key"):
+            _apply_overrides({}, ["dependency.nonexistent_key=val"])
+
+    def test_bad_int_raises(self):
+        from redictum import _apply_overrides, RedictumError
+
+        config = {"dependency": {"whisper_timeout": 120}}
+        with pytest.raises(RedictumError, match="Invalid value"):
+            _apply_overrides(config, ["dependency.whisper_timeout=abc"])

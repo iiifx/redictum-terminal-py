@@ -2,8 +2,18 @@
 # Fake arecord: write a minimal valid WAV file and wait for SIGTERM.
 # Real arecord requires ALSA hardware which is unavailable in Docker.
 # The last argument is the output file path.
+# Supports -d N (duration) — exits after N seconds (for auto-detect probe).
 
 OUTPUT="${@: -1}"
+DURATION=""
+
+# Parse -d <seconds> flag
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -d) DURATION="$2"; shift 2 ;;
+        *)  shift ;;
+    esac
+done
 
 if [[ -n "$OUTPUT" ]]; then
     python3 -c "
@@ -17,6 +27,12 @@ sys.stdout.buffer.write(hdr + pcm)
 " > "$OUTPUT"
 fi
 
-# Wait for SIGTERM (the way AudioRecorder.stop() terminates arecord)
+# If -d was given, exit after duration (simulates timed recording)
+if [[ -n "$DURATION" ]]; then
+    sleep "$DURATION"
+    exit 0
+fi
+
+# Otherwise wait for SIGTERM (the way AudioRecorder.stop() terminates arecord)
 trap 'exit 0' TERM INT
 while true; do sleep 100 & wait $!; done

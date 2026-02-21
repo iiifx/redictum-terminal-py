@@ -2,7 +2,7 @@
 # =============================================================================
 # Redictum Terminal — E2E Test Suite (Docker)
 # =============================================================================
-# Runs 10 daemon lifecycle tests in a clean Docker container.
+# Runs 13 daemon lifecycle tests in a clean Docker container.
 # Usage: docker compose up --build --abort-on-container-exit
 # =============================================================================
 
@@ -363,6 +363,68 @@ test_10_sigterm_graceful() {
     assert_file_missing "$WORKDIR/redictum.pid" || return 1
 }
 
+# T11: --set overrides config values at runtime (no sed needed)
+test_11_set_overrides() {
+    # First run to create config and .initialized
+    python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
+    wait_for_daemon || return 1
+    fix_whisper_config
+    local pid
+    pid=$(read_pid)
+    python3 "$SCRIPT" stop </dev/null >/dev/null 2>&1
+    wait_for_pid_gone "$pid" || return 1
+
+    # Start with --set overriding whisper paths (instead of fix_whisper_config)
+    touch "$WORKDIR/set-model.bin"
+    python3 "$SCRIPT" \
+        --set "dependency.whisper_cli=/usr/local/bin/whisper-cli" \
+        --set "dependency.whisper_model=$WORKDIR/set-model.bin" \
+        start </dev/null >/dev/null 2>&1
+    local rc=$?
+    assert_exit_ok $rc || return 1
+    wait_for_daemon || return 1
+
+    local pid2
+    pid2=$(read_pid)
+    assert_pid_alive "$pid2" || return 1
+    rm -f "$WORKDIR/set-model.bin"
+}
+
+# T12: --set with unknown key exits with error
+test_12_set_invalid_key() {
+    # Need .initialized so it doesn't trigger first-run flow
+    python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
+    wait_for_daemon || return 1
+    fix_whisper_config
+    local pid
+    pid=$(read_pid)
+    python3 "$SCRIPT" stop </dev/null >/dev/null 2>&1
+    wait_for_pid_gone "$pid" || return 1
+
+    local output
+    output=$(python3 "$SCRIPT" --set "nonexistent.key=val" start </dev/null 2>&1)
+    local rc=$?
+    assert_exit_error $rc || return 1
+    assert_contains "$output" "Unknown section" || return 1
+}
+
+# T13: --set with bad format (no =) exits with error
+test_13_set_bad_format() {
+    python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
+    wait_for_daemon || return 1
+    fix_whisper_config
+    local pid
+    pid=$(read_pid)
+    python3 "$SCRIPT" stop </dev/null >/dev/null 2>&1
+    wait_for_pid_gone "$pid" || return 1
+
+    local output
+    output=$(python3 "$SCRIPT" --set "dependency.whisper_language" start </dev/null 2>&1)
+    local rc=$?
+    assert_exit_error $rc || return 1
+    assert_contains "$output" "Invalid --set format" || return 1
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -393,6 +455,9 @@ run_test "T07 Stale PID"            test_07_stale_pid
 run_test "T08 Config reset"         test_08_config_reset
 run_test "T09 Restart cycle"        test_09_restart_cycle
 run_test "T10 SIGTERM graceful"     test_10_sigterm_graceful
+run_test "T11 --set overrides"      test_11_set_overrides
+run_test "T12 --set invalid key"    test_12_set_invalid_key
+run_test "T13 --set bad format"     test_13_set_bad_format
 
 # Summary
 echo -e "\n${BOLD}==============================${NC}"

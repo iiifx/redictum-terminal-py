@@ -2183,7 +2183,7 @@ def _log_transcript(transcripts_dir: Path, text: str) -> None:
 class RedictumApp:
     """Main application orchestrator that wires all components together."""
 
-    def __init__(self, script_dir: Path) -> None:
+    def __init__(self, script_dir: Path, overrides: list[str] | None = None) -> None:
         self._script_dir = script_dir
         self._config_mgr = ConfigManager(script_dir)
         self._dir_mgr = DirectoryManager(script_dir)
@@ -2192,6 +2192,14 @@ class RedictumApp:
         self._log_path = script_dir / "logs" / f"redictum_{ts}.log"
         self._init_marker = script_dir / INITIALIZED_FILENAME
         self._config: dict[str, Any] = {}
+        self._overrides = overrides or []
+
+    def _load_config(self) -> dict[str, Any]:
+        """Load config and apply CLI overrides (if any)."""
+        config = self._config_mgr.load()
+        if self._overrides:
+            _apply_overrides(config, self._overrides)
+        return config
 
     def _is_initialized(self) -> bool:
         """Check if the first-run marker file exists."""
@@ -2212,7 +2220,7 @@ class RedictumApp:
         Raises:
             RedictumError: If a critical dependency is missing.
         """
-        config = self._config_mgr.load()
+        config = self._load_config()
         self._dir_mgr.ensure()
         diag = Diagnostics(config, self._config_mgr)
         diag.run_stage1()
@@ -2220,7 +2228,7 @@ class RedictumApp:
         diag.check_whisper()
         self._mark_initialized()
         # Reload config — check_whisper() may have updated paths on disk
-        return self._config_mgr.load()
+        return self._load_config()
 
     def init_quick(self) -> dict[str, Any]:
         """Load config and ensure directories without running diagnostics.
@@ -2228,7 +2236,7 @@ class RedictumApp:
         Returns:
             Loaded configuration dictionary.
         """
-        config = self._config_mgr.load()
+        config = self._load_config()
         self._dir_mgr.ensure()
         return config
 
@@ -2293,6 +2301,9 @@ class RedictumApp:
             _rprint(f"Language: {detected} (auto)")
         else:
             _rprint(f"Language: {language}")
+
+        if self._overrides:
+            _rprint(f"[yellow]Overrides: {len(self._overrides)}[/yellow]")
 
         _rprint("\nPress Ctrl+C to stop.")
 
@@ -2398,7 +2409,7 @@ class RedictumApp:
         Returns:
             Exit code.
         """
-        self._config = self._config_mgr.load()
+        self._config = self._load_config()
         self._dir_mgr.ensure()
         installer = WhisperInstaller(self._config_mgr)
         installer.install()
@@ -2578,6 +2589,80 @@ class RedictumApp:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _apply_overrides(config: dict[str, Any], overrides: list[str]) -> dict[str, Any]:
+    """Apply ``--set section.key=value`` CLI overrides to config.
+
+    Validates that the key exists in DEFAULT_CONFIG and that the value
+    can be parsed to the expected type.
+
+    Args:
+        config: Already loaded config dict (defaults + INI).
+        overrides: List of ``"section.key=value"`` strings from CLI.
+
+    Returns:
+        Config with overrides applied (modified in place).
+
+    Raises:
+        RedictumError: On unknown key, missing ``=``, or type mismatch.
+    """
+    for item in overrides:
+        if "=" not in item:
+            raise RedictumError(
+                f'Invalid --set format: "{item}" (expected section.key=value)'
+            )
+        dotted_key, _, raw_value = item.partition("=")
+        parts = dotted_key.split(".")
+        if len(parts) != 2:
+            raise RedictumError(
+                f'Invalid key: "{dotted_key}" (expected section.key, '
+                f"e.g. dependency.whisper_language)"
+            )
+        section, key = parts
+
+        # Validate key exists in defaults
+        if section not in DEFAULT_CONFIG:
+            _all_sections = ", ".join(sorted(DEFAULT_CONFIG))
+            raise RedictumError(
+                f'Unknown section: "{section}"\n'
+                f"Available sections: {_all_sections}"
+            )
+        if key not in DEFAULT_CONFIG[section]:
+            _all_keys = ", ".join(sorted(DEFAULT_CONFIG[section]))
+            raise RedictumError(
+                f'Unknown key: "{key}" in [{section}]\n'
+                f"Available keys: {_all_keys}"
+            )
+
+        # Parse value to the expected type
+        default_val = DEFAULT_CONFIG[section][key]
+        try:
+            if isinstance(default_val, bool):
+                if raw_value.lower() in ("true", "yes", "1", "on"):
+                    parsed: Any = True
+                elif raw_value.lower() in ("false", "no", "0", "off"):
+                    parsed = False
+                else:
+                    raise ValueError(f"expected true/false, got {raw_value!r}")
+            elif isinstance(default_val, int):
+                parsed = int(raw_value)
+            elif isinstance(default_val, float):
+                parsed = float(raw_value)
+            else:
+                parsed = ConfigManager._strip_quotes(raw_value)
+        except (ValueError, TypeError) as exc:
+            raise RedictumError(
+                f'Invalid value for "{dotted_key}": {exc}'
+            ) from exc
+
+        # Apply override
+        if section not in config:
+            config[section] = {}
+        config[section][key] = parsed
+        logging.info("Config override: %s.%s = %r", section, key, parsed)
+
+    return config
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build and return the argument parser.
 
@@ -2597,6 +2682,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         action="store_true",
         help="Recreate config.ini with default values",
+    )
+    parser.add_argument(
+        "--set",
+        action="append",
+        dest="overrides",
+        metavar="section.key=value",
+        help="Override a config value for this run (repeatable)",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -2618,7 +2710,7 @@ def main() -> int:
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
-    app = RedictumApp(script_dir)
+    app = RedictumApp(script_dir, overrides=args.overrides)
 
     if args.config:
         config_path = script_dir / "config.ini"
