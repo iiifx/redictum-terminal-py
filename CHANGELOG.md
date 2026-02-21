@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Fix first-run crash: defer `import yaml` until config file actually needs parsing
 - Remove duplicate comments in default YAML config template (language, prompt)
 - Extract duplicated `_confirm()` method into a shared module-level function
 - Defer sound tone generation until first play (lazy init in SoundNotifier)
@@ -22,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Reap paplay child processes to prevent zombie accumulation
 
 ### Added
+- Dev sandbox for interactive first-run testing in Docker (`sandbox/sandbox.sh`)
 - Per-session log files with timestamp (`redictum_YYYYMMDD_HHMMSS.log`) and rotation
 - Show config file path and examples after first run
 

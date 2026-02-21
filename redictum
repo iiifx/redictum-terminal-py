@@ -277,11 +277,11 @@ class ConfigManager:
         Raises:
             RedictumError: If config.yaml exists but contains invalid YAML.
         """
-        import yaml  # late import: available after diagnostics installs PyYAML
-
         if not self._path.exists():
             self._write_default()
             return self._expand_paths(self._deep_copy(DEFAULT_CONFIG))
+
+        import yaml  # late import: available after diagnostics installs PyYAML
 
         try:
             raw = self._path.read_text(encoding="utf-8")

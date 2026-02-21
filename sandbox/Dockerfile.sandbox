@@ -1,0 +1,12 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=ru_RU.UTF-8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-dev \
+    sudo locales curl git \
+    pulseaudio-utils alsa-utils libasound2-plugins \
+    && locale-gen ru_RU.UTF-8
+
+WORKDIR /opt/redictum
