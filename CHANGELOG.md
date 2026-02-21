@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Extract duplicated `_confirm()` method into a shared module-level function
 - Defer sound tone generation until first play (lazy init in SoundNotifier)
 - Skip cmake/build-essential check on every startup (only check at first run)
+- Use `sys.executable -m pip` instead of bare `pip` for correct environment
 
 ## [1.0.0] - 2026-02-20
 

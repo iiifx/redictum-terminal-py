@@ -536,7 +536,7 @@ class Diagnostics:
 
     def _install_pip(self, packages: list[str]) -> bool:
         """Run pip install for the given packages. Return success."""
-        cmd = ["pip", "install", *packages]
+        cmd = [sys.executable, "-m", "pip", "install", *packages]
         _rprint(f"[dim]Running: {' '.join(cmd)}[/dim]")
         result = subprocess.run(cmd)
         return result.returncode == 0
