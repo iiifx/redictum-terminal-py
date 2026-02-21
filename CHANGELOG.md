@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Add missing logging to Transcriber, AudioRecorder, ClipboardManager, SoundNotifier
 - Replace deprecated `locale.getdefaultlocale()` with `LANG`/`LC_ALL` env vars
 - Include `_norm.wav` files in audio rotation (were accumulating indefinitely)
+- Reap paplay child processes to prevent zombie accumulation
 
 ## [1.0.0] - 2026-02-20
 
