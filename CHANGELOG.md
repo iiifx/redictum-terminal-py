@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Reap paplay child processes to prevent zombie accumulation
 
 ### Added
+- Auto-discover existing whisper models when configured model is missing (offer to pick or download new)
 - Dev sandbox for interactive first-run testing in Docker (`sandbox/sandbox.sh`)
 - Per-session log files with timestamp (`redictum_YYYYMMDD_HHMMSS.log`) and rotation
 - Show config file path and examples after first run

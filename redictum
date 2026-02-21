@@ -1219,13 +1219,73 @@ class WhisperInstaller:
         return model_path
 
     def _ensure_model(self) -> Path:
-        """Check if a model exists, offer download if not."""
+        """Check if a model exists, offer to pick existing or download new."""
         config = self._config_mgr.load()
         model_path_str = config.get("dependency", {}).get("whisper_model", "")
         if model_path_str and Path(model_path_str).exists():
             _rprint(f"  [green]\u2713[/green] Model: {Path(model_path_str).name}")
             return Path(model_path_str)
-        return self._select_and_download()
+
+        # Look for existing models in the models directory
+        existing = self._find_existing_models()
+        if not existing:
+            return self._select_and_download()
+
+        # Offer to pick an existing model or download new
+        _rprint("\n  [bold]Found installed models:[/bold]")
+        for i, (path, size_mb) in enumerate(existing, 1):
+            _rprint(f"    {i}. {path.name} ({size_mb})")
+        download_idx = len(existing) + 1
+        _rprint(f"    {download_idx}. Download new model")
+
+        while True:
+            try:
+                choice = input(
+                    f"\n  Select [1-{download_idx}, default=1]: "
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                choice = ""
+            if not choice:
+                choice = "1"
+            try:
+                idx = int(choice)
+                if 1 <= idx <= download_idx:
+                    break
+            except ValueError:
+                pass
+            _rprint(f"  [red]Invalid choice, enter 1-{download_idx}[/red]")
+
+        if idx == download_idx:
+            return self._select_and_download()
+
+        selected = existing[idx - 1][0]
+        _rprint(f"  [green]\u2713[/green] Using model: {selected.name}")
+        return selected
+
+    def _find_existing_models(self) -> list[tuple[Path, str]]:
+        """Find ggml model files in the whisper.cpp models directory.
+
+        Returns:
+            List of (path, human_size) tuples, sorted by size descending.
+        """
+        models_dir = self._install_dir / "models"
+        if not models_dir.is_dir():
+            return []
+        results: list[tuple[Path, str]] = []
+        for f in models_dir.glob("ggml-*.bin"):
+            if f.name.startswith("for-tests-"):
+                continue
+            size = f.stat().st_size
+            if size < 1024 * 1024:
+                continue  # skip tiny/corrupt files
+            if size >= 1024 * 1024 * 1024:
+                label = f"{size / (1024 ** 3):.1f} GB"
+            else:
+                label = f"{size / (1024 ** 2):.0f} MB"
+            results.append((f, label))
+        results.sort(key=lambda x: x[0].stat().st_size, reverse=True)
+        return results
 
     # -- Config --------------------------------------------------------------
 
