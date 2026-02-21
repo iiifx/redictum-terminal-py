@@ -41,7 +41,6 @@ STATE_RECORDING = "recording"
 STATE_PROCESSING = "processing"
 
 PID_FILENAME = "redictum.pid"
-LOG_FILENAME = "redictum.log"
 INITIALIZED_FILENAME = ".initialized"
 STOP_TIMEOUT = 3.0
 
@@ -212,6 +211,10 @@ storage:
 
   transcripts:
     # Maximum number of daily transcript files to keep (oldest are deleted)
+    max_files: 50
+
+  logs:
+    # Maximum number of session log files to keep (oldest are deleted)
     max_files: 50
 """
 
@@ -1819,12 +1822,15 @@ class Housekeeping:
         self,
         audio_dir: Path,
         transcripts_dir: Path,
+        logs_dir: Path,
         storage_cfg: dict[str, Any],
     ) -> None:
         self._audio_dir = audio_dir
         self._transcripts_dir = transcripts_dir
+        self._logs_dir = logs_dir
         self._audio_max = storage_cfg.get("audio", {}).get("max_files", 50)
         self._transcripts_max = storage_cfg.get("transcripts", {}).get("max_files", 50)
+        self._logs_max = storage_cfg.get("logs", {}).get("max_files", 50)
 
     def rotate_audio(self) -> int:
         """Remove oldest audio files exceeding the limit.
@@ -1849,6 +1855,18 @@ class Housekeeping:
             key=lambda p: p.stat().st_mtime,
         )
         return self._rotate(txt_files, self._transcripts_max, "Transcript")
+
+    def rotate_logs(self) -> int:
+        """Remove oldest session log files exceeding the limit.
+
+        Returns:
+            Number of files removed.
+        """
+        log_files = sorted(
+            self._logs_dir.glob("*.log"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        return self._rotate(log_files, self._logs_max, "Log")
 
     @staticmethod
     def _rotate(files: list[Path], max_files: int, label: str) -> int:
@@ -1889,7 +1907,8 @@ class RedictumApp:
         self._config_mgr = ConfigManager(script_dir)
         self._dir_mgr = DirectoryManager(script_dir)
         self._pid_path = script_dir / PID_FILENAME
-        self._log_path = script_dir / "logs" / LOG_FILENAME
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._log_path = script_dir / "logs" / f"redictum_{ts}.log"
         self._init_marker = script_dir / INITIALIZED_FILENAME
         self._config: dict[str, Any] = {}
 
@@ -2131,7 +2150,8 @@ class RedictumApp:
         )
         clipboard = ClipboardManager()
         notifier = SoundNotifier(volume=sound_cfg.get("signal_volume", 30))
-        housekeeper = Housekeeping(audio_dir, transcripts_dir, storage)
+        logs_dir = self._log_path.parent
+        housekeeper = Housekeeping(audio_dir, transcripts_dir, logs_dir, storage)
         listener = HotkeyListener(
             hotkey["key"], hotkey["hold_delay"],
             translate_key=hotkey.get("translate_key", ""),
@@ -2213,6 +2233,7 @@ class RedictumApp:
                         notifier.play_stop()
                     housekeeper.rotate_audio()
                     housekeeper.rotate_transcripts()
+                    housekeeper.rotate_logs()
                     logging.info("Pipeline complete, state -> idle")
                 except RedictumError:
                     logging.exception("Pipeline error")

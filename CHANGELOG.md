@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Reap paplay child processes to prevent zombie accumulation
 
 ### Added
+- Per-session log files with timestamp (`redictum_YYYYMMDD_HHMMSS.log`) and rotation
 - Show config file path and examples after first run
 
 ### Changed

@@ -145,9 +145,11 @@ wait_for_daemon() {
     fi
     if ! kill -0 "$pid" 2>/dev/null; then
         echo -e "  ${RED}FAIL${NC}: daemon (PID $pid) died shortly after start"
-        if [[ -f "$WORKDIR/logs/redictum.log" ]]; then
+        local latest_log
+        latest_log=$(ls -t "$WORKDIR/logs/"*.log 2>/dev/null | head -1)
+        if [[ -n "$latest_log" ]]; then
             echo "  Last log lines:"
-            tail -5 "$WORKDIR/logs/redictum.log" 2>/dev/null | sed 's/^/    /'
+            tail -5 "$latest_log" 2>/dev/null | sed 's/^/    /'
         fi
         return 1
     fi
