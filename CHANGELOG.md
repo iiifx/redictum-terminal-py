@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 - Remove duplicate comments in default YAML config template (language, prompt)
 - Extract duplicated `_confirm()` method into a shared module-level function
+- Defer sound tone generation until first play (lazy init in SoundNotifier)
 
 ## [1.0.0] - 2026-02-20
 

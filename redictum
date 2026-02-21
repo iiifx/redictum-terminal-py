@@ -1498,17 +1498,15 @@ class ClipboardManager:
 class SoundNotifier:
     """Play WAV feedback tones via paplay.
 
-    Tones are procedurally generated at init time and cached as
+    Tones are procedurally generated lazily on first play and cached as
     temporary WAV files. See ``_generate_tones()`` at the bottom
     of this module for the synthesis code.
     """
 
     def __init__(self, volume: int = 30) -> None:
         self._volume = max(0, min(100, volume))
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="redictum_"))
+        self._temp_dir: Path | None = None
         self._sounds: dict[str, Path] = {}
-        for name, samples in _generate_tones().items():
-            self._sounds[name] = self._write_wav(f"{name}.wav", samples)
 
     def play_start(self) -> None:
         """Play the 'recording started' tone."""
@@ -1528,11 +1526,21 @@ class SoundNotifier:
 
     def cleanup(self) -> None:
         """Remove temporary WAV files."""
-        shutil.rmtree(self._temp_dir, ignore_errors=True)
+        if self._temp_dir is not None:
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
 
     # -- internals -----------------------------------------------------------
 
+    def _ensure_tones(self) -> None:
+        """Generate and cache all WAV tones on first use."""
+        if self._sounds:
+            return
+        self._temp_dir = Path(tempfile.mkdtemp(prefix="redictum_"))
+        for name, samples in _generate_tones().items():
+            self._sounds[name] = self._write_wav(f"{name}.wav", samples)
+
     def _play(self, name: str) -> None:
+        self._ensure_tones()
         wav_path = self._sounds.get(name)
         if wav_path is None or not wav_path.exists():
             return
