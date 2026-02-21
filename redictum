@@ -228,13 +228,20 @@ def _rprint(text: str) -> None:
         print(re.sub(r"\[/?[^\]]*\]", "", text))
 
 
-def _confirm(prompt: str) -> bool:
-    """Ask the user y/n via input(). Return False on EOF/Ctrl+C."""
+def _confirm(prompt: str, default: bool = False) -> bool:
+    """Ask the user y/n via input(). Return *default* on empty Enter.
+
+    The hint ``[Y/n]`` or ``[y/N]`` is appended automatically.
+    Return False on EOF/Ctrl+C.
+    """
+    hint = "[Y/n]" if default else "[y/N]"
     try:
-        answer = input(prompt).strip().lower()
+        answer = input(f"{prompt} {hint}: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
         return False
+    if not answer:
+        return default
     return answer in ("y", "yes")
 
 
@@ -476,7 +483,7 @@ class Diagnostics:
         if missing_pip:
             _rprint(f"Missing Python packages: {', '.join(missing_pip)}")
 
-        if not _confirm("\nInstall missing dependencies? [y/n]: "):
+        if not _confirm("\nInstall missing dependencies?", default=True):
             _rprint("[yellow]Skipping installation. Some features may not work.[/yellow]")
             return
 
@@ -580,7 +587,7 @@ class Diagnostics:
         if cli_ok and model_ok:
             return
 
-        if _confirm("\nInstall whisper.cpp? [y/n]: "):
+        if _confirm("\nInstall whisper.cpp?", default=True):
             installer = WhisperInstaller(self._config_mgr)
             installer.install()
         else:
@@ -657,7 +664,7 @@ class WhisperInstaller:
             cuda_ok = self._ensure_cuda()
             if cuda_ok:
                 _rprint("  [yellow]\u26a0[/yellow] CUDA ready but whisper.cpp built without it")
-                if _confirm("  Rebuild with CUDA for GPU acceleration? [y/n]: "):
+                if _confirm("  Rebuild with CUDA for GPU acceleration?", default=True):
                     need_rebuild = True
 
         if need_rebuild:
@@ -741,7 +748,7 @@ class WhisperInstaller:
         else:
             _rprint("  [yellow]\u26a0[/yellow] NVIDIA GPU detected but CUDA toolkit not installed")
 
-        if _confirm("  Install CUDA toolkit from NVIDIA repository? [y/n]: "):
+        if _confirm("  Install CUDA toolkit from NVIDIA repository?", default=True):
             if self._install_cuda_toolkit():
                 return True
         _rprint("  [dim]Continuing with CPU-only build[/dim]")

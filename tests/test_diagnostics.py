@@ -165,6 +165,21 @@ class TestConfirm:
         monkeypatch.setattr("builtins.input", lambda _: "n")
         assert _confirm("Install? ") is False
 
+    def test_empty_default_false(self, monkeypatch):
+        from redictum import _confirm
+        monkeypatch.setattr("builtins.input", lambda _: "")
+        assert _confirm("Install?") is False
+
+    def test_empty_default_true(self, monkeypatch):
+        from redictum import _confirm
+        monkeypatch.setattr("builtins.input", lambda _: "")
+        assert _confirm("Install?", default=True) is True
+
+    def test_explicit_no_overrides_default_true(self, monkeypatch):
+        from redictum import _confirm
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+        assert _confirm("Install?", default=True) is False
+
     def test_eof(self, monkeypatch):
         from redictum import _confirm
 
@@ -172,7 +187,7 @@ class TestConfirm:
             raise EOFError
 
         monkeypatch.setattr("builtins.input", raise_eof)
-        assert _confirm("Install? ") is False
+        assert _confirm("Install?") is False
 
 
 class TestCheckWhisper:

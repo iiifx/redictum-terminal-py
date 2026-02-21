@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Include `_norm.wav` files in audio rotation (were accumulating indefinitely)
 - Reap paplay child processes to prevent zombie accumulation
 
+### Changed
+- Confirmation prompts now show default value (`[Y/n]` or `[y/N]`); Enter accepts default
+
 ## [1.0.0] - 2026-02-20
 
 ### Added
