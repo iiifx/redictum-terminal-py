@@ -58,6 +58,9 @@ APT_PACKAGES: dict[str, str] = {
     "ffmpeg": "ffmpeg",
     "xclip": "xclip",
     "xdotool": "xdotool",
+}
+
+APT_BUILD_PACKAGES: dict[str, str] = {
     "cmake": "cmake",
     "build-essential": "build-essential",
 }
@@ -500,7 +503,7 @@ class Diagnostics:
     def _find_missing_apt(self) -> list[str]:
         """Return list of missing apt package names."""
         missing: list[str] = []
-        for name, package in APT_PACKAGES.items():
+        for name, package in {**APT_PACKAGES, **APT_BUILD_PACKAGES}.items():
             if name == "build-essential":
                 found = self._check_dpkg(package)
             else:
@@ -1907,20 +1910,9 @@ class RedictumApp:
             return False
         if not os.environ.get("DISPLAY"):
             return False
-        # Stage 2: apt packages
-        for name, package in APT_PACKAGES.items():
-            if name == "build-essential":
-                try:
-                    r = subprocess.run(
-                        ["dpkg", "-s", package],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    if r.returncode != 0:
-                        return False
-                except FileNotFoundError:
-                    return False
-            elif not shutil.which(name):
+        # Stage 2: apt packages (runtime only, build tools skipped)
+        for name in APT_PACKAGES:
+            if not shutil.which(name):
                 return False
         # Stage 2: pip packages
         for import_name in PIP_PACKAGES:

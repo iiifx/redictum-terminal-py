@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Remove duplicate comments in default YAML config template (language, prompt)
 - Extract duplicated `_confirm()` method into a shared module-level function
 - Defer sound tone generation until first play (lazy init in SoundNotifier)
+- Skip cmake/build-essential check on every startup (only check at first run)
 
 ## [1.0.0] - 2026-02-20
 
