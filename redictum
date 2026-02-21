@@ -132,15 +132,12 @@ dependency:
     # Path to whisper model file
     model: "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin"
 
-    # Language for transcription (e.g., "ru", "en", "de", "fr")
     # Language for transcription: "auto" detects from system locale,
     # or set explicitly (e.g., "ru", "en", "uk", "de", "fr")
     language: "auto"
 
     # Optional prompt to guide whisper transcription
     # Helps with domain-specific vocabulary and punctuation
-    # Optional prompt to guide whisper transcription
-    # Helps with punctuation and domain-specific vocabulary
     prompt: "Proper conversational speech with correct punctuation: commas, periods, question marks and exclamation marks. Anglicisms, technical terms and abbreviations are used."
 
     # Maximum time (seconds) to wait for transcription to finish
