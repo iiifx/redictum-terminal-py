@@ -1501,25 +1501,37 @@ class ClipboardManager:
 
     def copy(self, text: str) -> None:
         """Copy text to the system clipboard via xclip."""
-        result = subprocess.run(
-            ["xclip", "-selection", "clipboard"],
-            input=text.encode("utf-8"),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if result.returncode != 0:
-            logging.warning("xclip copy failed (code %d)", result.returncode)
+        try:
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard"],
+                input=text.encode("utf-8"),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                logging.warning("xclip copy failed (code %d)", result.returncode)
+        except subprocess.TimeoutExpired:
+            logging.warning("xclip copy timed out")
+        except (FileNotFoundError, OSError) as exc:
+            logging.warning("xclip copy failed: %s", exc)
 
     def paste(self) -> None:
         """Simulate Ctrl+V to paste from clipboard."""
         time.sleep(0.05)
-        result = subprocess.run(
-            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if result.returncode != 0:
-            logging.warning("xdotool paste failed (code %d)", result.returncode)
+        try:
+            result = subprocess.run(
+                ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                logging.warning("xdotool paste failed (code %d)", result.returncode)
+        except subprocess.TimeoutExpired:
+            logging.warning("xdotool paste timed out")
+        except (FileNotFoundError, OSError) as exc:
+            logging.warning("xdotool paste failed: %s", exc)
 
     def save(self) -> tuple[str, bytes] | None:
         """Save current clipboard contents (target type + raw data).

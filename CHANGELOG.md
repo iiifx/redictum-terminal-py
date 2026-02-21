@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Add timeout to clipboard copy/paste to prevent hanging when X11 session is lost
 - Play error tone on empty recording instead of silent failure; log `arecord` exit code for diagnostics
 - Catch fatal errors at top level: log full traceback and show user-visible message instead of silent death
 - Recover from recorder crash: reset state to idle on `arecord` start failure instead of hanging forever
