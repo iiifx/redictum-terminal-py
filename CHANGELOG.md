@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Use secure temp files (mkstemp) with guaranteed cleanup in CUDA and whisper installers
 - Stop logging transcribed text to file (privacy); log character count instead
 - Add missing logging to Transcriber, AudioRecorder, ClipboardManager, SoundNotifier
+- Replace deprecated `locale.getdefaultlocale()` with `LANG`/`LC_ALL` env vars
 
 ## [1.0.0] - 2026-02-20
 

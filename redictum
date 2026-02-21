@@ -1327,8 +1327,7 @@ def _detect_language() -> str:
         Two-letter ISO 639-1 language code, or empty string if
         detection fails.
     """
-    import locale
-    loc = locale.getdefaultlocale()[0] or os.environ.get("LANG", "")
+    loc = os.environ.get("LANG", "") or os.environ.get("LC_ALL", "")
     # loc is like "ru_RU.UTF-8" or "ru_RU" or "en_US.UTF-8"
     if "_" in loc:
         return loc.split("_")[0].lower()
