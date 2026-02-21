@@ -798,15 +798,18 @@ class WhisperInstaller:
             return False
 
         _rprint("  [dim]Installing CUDA keyring and toolkit (sudo required)...[/dim]")
-        install_script = (
-            f"sudo dpkg -i {keyring_deb}"
-            f" && sudo apt-get update -qq"
-            f" && sudo apt-get install -y cuda-toolkit"
-        )
-        result = subprocess.run(["bash", "-c", install_script])
-        # Clean up
+        result = subprocess.run(["sudo", "dpkg", "-i", str(keyring_deb)])
         keyring_deb.unlink(missing_ok=True)
+        if result.returncode != 0:
+            _rprint("  [yellow]\u26a0[/yellow] Failed to install CUDA keyring")
+            return False
 
+        result = subprocess.run(["sudo", "apt-get", "update", "-qq"])
+        if result.returncode != 0:
+            _rprint("  [yellow]\u26a0[/yellow] Failed to update package list")
+            return False
+
+        result = subprocess.run(["sudo", "apt-get", "install", "-y", "cuda-toolkit"])
         if result.returncode != 0:
             _rprint("  [yellow]\u26a0[/yellow] CUDA toolkit installation failed")
             return False
