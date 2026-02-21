@@ -42,9 +42,9 @@ class TestRotate:
 
 
 class TestRotateAudio:
-    """Housekeeping.rotate_audio: skip *_norm.wav."""
+    """Housekeeping.rotate_audio: rotate all wav including *_norm.wav."""
 
-    def test_skips_norm_files(self, tmp_path):
+    def test_includes_norm_files(self, tmp_path):
         from redictum import Housekeeping
 
         audio_dir = tmp_path / "audio"
@@ -52,7 +52,7 @@ class TestRotateAudio:
         transcripts_dir = tmp_path / "transcripts"
         transcripts_dir.mkdir()
 
-        # Create 4 regular + 2 norm files
+        # Create 4 regular + 2 norm files (6 total)
         for i in range(4):
             (audio_dir / f"rec_{i:02d}.wav").write_text("x")
             time.sleep(0.01)
@@ -61,10 +61,9 @@ class TestRotateAudio:
 
         hk = Housekeeping(audio_dir, transcripts_dir, {"audio": {"max_files": 2}})
         removed = hk.rotate_audio()
-        assert removed == 2
-        # _norm files are untouched
-        assert (audio_dir / "rec_00_norm.wav").exists()
-        assert (audio_dir / "rec_01_norm.wav").exists()
+        assert removed == 4
+        # Only 2 newest files remain
+        assert len(list(audio_dir.glob("*.wav"))) == 2
 
 
 class TestRotateTranscripts:

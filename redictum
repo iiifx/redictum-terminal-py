@@ -1825,8 +1825,7 @@ class Housekeeping:
             Number of files removed.
         """
         wav_files = sorted(
-            (p for p in self._audio_dir.glob("*.wav")
-             if not p.stem.endswith("_norm")),
+            self._audio_dir.glob("*.wav"),
             key=lambda p: p.stat().st_mtime,
         )
         return self._rotate(wav_files, self._audio_max, "Audio")

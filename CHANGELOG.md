@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Stop logging transcribed text to file (privacy); log character count instead
 - Add missing logging to Transcriber, AudioRecorder, ClipboardManager, SoundNotifier
 - Replace deprecated `locale.getdefaultlocale()` with `LANG`/`LC_ALL` env vars
+- Include `_norm.wav` files in audio rotation (were accumulating indefinitely)
 
 ## [1.0.0] - 2026-02-20
 
