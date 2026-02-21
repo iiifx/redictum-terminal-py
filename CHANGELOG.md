@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Skip cmake/build-essential check on every startup (only check at first run)
 - Use `sys.executable -m pip` instead of bare `pip` for correct environment
 - Replace `bash -c` with list-based subprocess calls in CUDA installer (security)
+- Use secure temp files (mkstemp) with guaranteed cleanup in CUDA and whisper installers
 
 ## [1.0.0] - 2026-02-20
 

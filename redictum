@@ -782,90 +782,100 @@ class WhisperInstaller:
 
         # Download and install keyring
         keyring_url = self.CUDA_KEYRING_URL.format(distro=distro)
-        keyring_deb = Path(tempfile.gettempdir()) / "cuda-keyring.deb"
-        _rprint("  [dim]Downloading NVIDIA CUDA keyring...[/dim]")
-        dl_cmd: list[str] = []
-        if shutil.which("curl"):
-            dl_cmd = ["curl", "-fsSL", "-o", str(keyring_deb), keyring_url]
-        elif shutil.which("wget"):
-            dl_cmd = ["wget", "-q", "-O", str(keyring_deb), keyring_url]
-        else:
-            _rprint("  [red]Neither curl nor wget found[/red]")
+        fd, keyring_path = tempfile.mkstemp(suffix=".deb", prefix="cuda-keyring-")
+        keyring_deb = Path(keyring_path)
+        os.close(fd)
+
+        try:
+            _rprint("  [dim]Downloading NVIDIA CUDA keyring...[/dim]")
+            dl_cmd: list[str] = []
+            if shutil.which("curl"):
+                dl_cmd = ["curl", "-fsSL", "-o", str(keyring_deb), keyring_url]
+            elif shutil.which("wget"):
+                dl_cmd = ["wget", "-q", "-O", str(keyring_deb), keyring_url]
+            else:
+                _rprint("  [red]Neither curl nor wget found[/red]")
+                return False
+
+            if subprocess.run(dl_cmd).returncode != 0:
+                _rprint("  [yellow]\u26a0[/yellow] Failed to download CUDA keyring")
+                return False
+
+            _rprint("  [dim]Installing CUDA keyring and toolkit (sudo required)...[/dim]")
+            result = subprocess.run(["sudo", "dpkg", "-i", str(keyring_deb)])
+            if result.returncode != 0:
+                _rprint("  [yellow]\u26a0[/yellow] Failed to install CUDA keyring")
+                return False
+
+            result = subprocess.run(["sudo", "apt-get", "update", "-qq"])
+            if result.returncode != 0:
+                _rprint("  [yellow]\u26a0[/yellow] Failed to update package list")
+                return False
+
+            result = subprocess.run(
+                ["sudo", "apt-get", "install", "-y", "cuda-toolkit"],
+            )
+            if result.returncode != 0:
+                _rprint("  [yellow]\u26a0[/yellow] CUDA toolkit installation failed")
+                return False
+
+            # Verify new nvcc
+            ver = self._get_nvcc_version()
+            if ver and ver >= self.CUDA_MIN_VERSION:
+                _rprint(f"  [green]\u2713[/green] CUDA toolkit {ver} installed")
+                return True
+
+            _rprint("  [yellow]\u26a0[/yellow] CUDA installed but nvcc not found in PATH")
             return False
-
-        if subprocess.run(dl_cmd).returncode != 0:
-            _rprint("  [yellow]\u26a0[/yellow] Failed to download CUDA keyring")
-            return False
-
-        _rprint("  [dim]Installing CUDA keyring and toolkit (sudo required)...[/dim]")
-        result = subprocess.run(["sudo", "dpkg", "-i", str(keyring_deb)])
-        keyring_deb.unlink(missing_ok=True)
-        if result.returncode != 0:
-            _rprint("  [yellow]\u26a0[/yellow] Failed to install CUDA keyring")
-            return False
-
-        result = subprocess.run(["sudo", "apt-get", "update", "-qq"])
-        if result.returncode != 0:
-            _rprint("  [yellow]\u26a0[/yellow] Failed to update package list")
-            return False
-
-        result = subprocess.run(["sudo", "apt-get", "install", "-y", "cuda-toolkit"])
-        if result.returncode != 0:
-            _rprint("  [yellow]\u26a0[/yellow] CUDA toolkit installation failed")
-            return False
-
-        # Verify new nvcc
-        ver = self._get_nvcc_version()
-        if ver and ver >= self.CUDA_MIN_VERSION:
-            _rprint(f"  [green]\u2713[/green] CUDA toolkit {ver} installed")
-            return True
-
-        _rprint("  [yellow]\u26a0[/yellow] CUDA installed but nvcc not found in PATH")
-        return False
+        finally:
+            keyring_deb.unlink(missing_ok=True)
 
     # -- Clone / Build -------------------------------------------------------
 
     def _clone(self) -> None:
         """Download and extract the whisper.cpp release tarball."""
         url = self.TARBALL_URL.format(version=self.WHISPER_VERSION)
-        tarball = Path(tempfile.gettempdir()) / "whisper.cpp.tar.gz"
+        fd, tarball_path = tempfile.mkstemp(suffix=".tar.gz", prefix="whisper-cpp-")
+        tarball = Path(tarball_path)
+        os.close(fd)
 
-        if self._install_dir.exists():
-            _rprint(f"  Removing old {self._install_dir}...")
-            shutil.rmtree(self._install_dir)
+        try:
+            if self._install_dir.exists():
+                _rprint(f"  Removing old {self._install_dir}...")
+                shutil.rmtree(self._install_dir)
 
-        _rprint(f"  Downloading whisper.cpp {self.WHISPER_VERSION}...")
-        if shutil.which("curl"):
-            cmd = ["curl", "-fsSL", "-o", str(tarball), url]
-        elif shutil.which("wget"):
-            cmd = ["wget", "-q", "-O", str(tarball), url]
-        else:
-            raise RedictumError("Neither curl nor wget found")
+            _rprint(f"  Downloading whisper.cpp {self.WHISPER_VERSION}...")
+            if shutil.which("curl"):
+                cmd = ["curl", "-fsSL", "-o", str(tarball), url]
+            elif shutil.which("wget"):
+                cmd = ["wget", "-q", "-O", str(tarball), url]
+            else:
+                raise RedictumError("Neither curl nor wget found")
 
-        result = subprocess.run(cmd)
-        if result.returncode != 0:
-            tarball.unlink(missing_ok=True)
-            raise RedictumError("Failed to download whisper.cpp tarball")
+            result = subprocess.run(cmd)
+            if result.returncode != 0:
+                raise RedictumError("Failed to download whisper.cpp tarball")
 
-        _rprint("  Extracting...")
-        result = subprocess.run(
-            ["tar", "xzf", str(tarball), "-C", str(self._install_dir.parent)],
-        )
-        tarball.unlink(missing_ok=True)
-        if result.returncode != 0:
-            raise RedictumError("Failed to extract whisper.cpp tarball")
-
-        # tar extracts to whisper.cpp-<version> (without 'v' prefix)
-        version_stripped = self.WHISPER_VERSION.lstrip("v")
-        extracted = self._install_dir.parent / f"whisper.cpp-{version_stripped}"
-        if extracted.exists():
-            extracted.rename(self._install_dir)
-        elif not self._install_dir.exists():
-            raise RedictumError(
-                f"Expected directory {extracted} not found after extraction"
+            _rprint("  Extracting...")
+            result = subprocess.run(
+                ["tar", "xzf", str(tarball), "-C", str(self._install_dir.parent)],
             )
+            if result.returncode != 0:
+                raise RedictumError("Failed to extract whisper.cpp tarball")
 
-        _rprint(f"  [green]\u2713[/green] whisper.cpp {self.WHISPER_VERSION} ready")
+            # tar extracts to whisper.cpp-<version> (without 'v' prefix)
+            version_stripped = self.WHISPER_VERSION.lstrip("v")
+            extracted = self._install_dir.parent / f"whisper.cpp-{version_stripped}"
+            if extracted.exists():
+                extracted.rename(self._install_dir)
+            elif not self._install_dir.exists():
+                raise RedictumError(
+                    f"Expected directory {extracted} not found after extraction"
+                )
+
+            _rprint(f"  [green]\u2713[/green] whisper.cpp {self.WHISPER_VERSION} ready")
+        finally:
+            tarball.unlink(missing_ok=True)
 
     def _build(self, use_cuda: bool) -> None:
         """Configure and build whisper.cpp."""
