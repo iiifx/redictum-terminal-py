@@ -153,26 +153,26 @@ class TestFindMissingPip:
 
 
 class TestConfirm:
-    """Diagnostics._confirm: y/n input handling."""
+    """Module-level _confirm: y/n input handling."""
 
-    def test_yes(self, make_diagnostics, monkeypatch):
-        diag = make_diagnostics()
+    def test_yes(self, monkeypatch):
+        from redictum import _confirm
         monkeypatch.setattr("builtins.input", lambda _: "y")
-        assert diag._confirm("Install? ") is True
+        assert _confirm("Install? ") is True
 
-    def test_no(self, make_diagnostics, monkeypatch):
-        diag = make_diagnostics()
+    def test_no(self, monkeypatch):
+        from redictum import _confirm
         monkeypatch.setattr("builtins.input", lambda _: "n")
-        assert diag._confirm("Install? ") is False
+        assert _confirm("Install? ") is False
 
-    def test_eof(self, make_diagnostics, monkeypatch):
-        diag = make_diagnostics()
+    def test_eof(self, monkeypatch):
+        from redictum import _confirm
 
         def raise_eof(_):
             raise EOFError
 
         monkeypatch.setattr("builtins.input", raise_eof)
-        assert diag._confirm("Install? ") is False
+        assert _confirm("Install? ") is False
 
 
 class TestCheckWhisper:

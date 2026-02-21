@@ -225,6 +225,16 @@ def _rprint(text: str) -> None:
         print(re.sub(r"\[/?[^\]]*\]", "", text))
 
 
+def _confirm(prompt: str) -> bool:
+    """Ask the user y/n via input(). Return False on EOF/Ctrl+C."""
+    try:
+        answer = input(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer in ("y", "yes")
+
+
 # ---------------------------------------------------------------------------
 # ConfigManager
 # ---------------------------------------------------------------------------
@@ -463,7 +473,7 @@ class Diagnostics:
         if missing_pip:
             _rprint(f"Missing Python packages: {', '.join(missing_pip)}")
 
-        if not self._confirm("\nInstall missing dependencies? [y/n]: "):
+        if not _confirm("\nInstall missing dependencies? [y/n]: "):
             _rprint("[yellow]Skipping installation. Some features may not work.[/yellow]")
             return
 
@@ -544,15 +554,6 @@ class Diagnostics:
         except FileNotFoundError:
             return False
 
-    def _confirm(self, prompt: str) -> bool:
-        """Ask the user y/n via input()."""
-        try:
-            answer = input(prompt).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return False
-        return answer in ("y", "yes")
-
     # -- whisper.cpp: warning only ------------------------------------------
 
     def check_whisper(self) -> None:
@@ -576,7 +577,7 @@ class Diagnostics:
         if cli_ok and model_ok:
             return
 
-        if self._confirm("\nInstall whisper.cpp? [y/n]: "):
+        if _confirm("\nInstall whisper.cpp? [y/n]: "):
             installer = WhisperInstaller(self._config_mgr)
             installer.install()
         else:
@@ -653,7 +654,7 @@ class WhisperInstaller:
             cuda_ok = self._ensure_cuda()
             if cuda_ok:
                 _rprint("  [yellow]\u26a0[/yellow] CUDA ready but whisper.cpp built without it")
-                if self._confirm("  Rebuild with CUDA for GPU acceleration? [y/n]: "):
+                if _confirm("  Rebuild with CUDA for GPU acceleration? [y/n]: "):
                     need_rebuild = True
 
         if need_rebuild:
@@ -737,7 +738,7 @@ class WhisperInstaller:
         else:
             _rprint("  [yellow]\u26a0[/yellow] NVIDIA GPU detected but CUDA toolkit not installed")
 
-        if self._confirm("  Install CUDA toolkit from NVIDIA repository? [y/n]: "):
+        if _confirm("  Install CUDA toolkit from NVIDIA repository? [y/n]: "):
             if self._install_cuda_toolkit():
                 return True
         _rprint("  [dim]Continuing with CPU-only build[/dim]")
@@ -817,15 +818,6 @@ class WhisperInstaller:
         return False
 
     # -- Clone / Build -------------------------------------------------------
-
-    def _confirm(self, prompt: str) -> bool:
-        """Ask the user y/n."""
-        try:
-            answer = input(prompt).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return False
-        return answer in ("y", "yes")
 
     def _clone(self) -> None:
         """Download and extract the whisper.cpp release tarball."""
