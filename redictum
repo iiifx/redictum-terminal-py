@@ -2224,7 +2224,14 @@ class RedictumApp:
                     return
                 state = STATE_RECORDING
                 _current_mode = mode
-            recorder.start()
+            try:
+                recorder.start()
+            except Exception:
+                with state_lock:
+                    state = STATE_IDLE
+                logging.exception("Failed to start recording")
+                notifier.play_error()
+                return
             if sound_cfg.get("signal_start", True):
                 notifier.play_start()
             logging.info("Recording started (mode: %s)", mode)

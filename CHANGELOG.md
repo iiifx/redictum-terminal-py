@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Recover from recorder crash: reset state to idle on `arecord` start failure instead of hanging forever
 - Handle PEP 668 (`externally-managed-environment`): fallback chain apt → pip → `--break-system-packages`
 - Fix first-run crash: defer `import yaml` until config file actually needs parsing
 - Remove duplicate comments in default YAML config template (language, prompt)
