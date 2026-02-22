@@ -24,14 +24,14 @@ WORKDIR /opt/redictum-test
 
 # Fake binaries override real paplay/arecord in PATH
 # (/usr/local/bin has priority over /usr/bin)
-COPY docker/fake-paplay  /usr/local/bin/paplay
-COPY docker/fake-arecord /usr/local/bin/arecord
-COPY docker/fake-whisper-cli /usr/local/bin/whisper-cli
+COPY e2e/fake-paplay  /usr/local/bin/paplay
+COPY e2e/fake-arecord /usr/local/bin/arecord
+COPY e2e/fake-whisper-cli /usr/local/bin/whisper-cli
 RUN chmod +x /usr/local/bin/paplay /usr/local/bin/arecord /usr/local/bin/whisper-cli
 
 COPY redictum ./redictum
 
-COPY docker/run_e2e.sh ./run_e2e.sh
+COPY e2e/run_e2e.sh ./run_e2e.sh
 RUN chmod +x ./run_e2e.sh
 
 ENTRYPOINT ["./run_e2e.sh"]

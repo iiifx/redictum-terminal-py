@@ -2,4 +2,4 @@ services:
   e2e:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: e2e/Dockerfile
