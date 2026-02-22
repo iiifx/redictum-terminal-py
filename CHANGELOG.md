@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Validate config value types on load: reject invalid int/float with clear error message
 - Add silence detection (RMS energy gate) to prevent whisper hallucinations on silent recordings
 - Refactor `_main_loop` monolith into focused methods: `_on_hold`, `_on_release`, `_run_pipeline`, `_graceful_shutdown`
+- Fix English prompt overriding `-l ru` on large whisper models: auto-select prompt by language
+
+### Added
+- Language-dependent prompts (`LANGUAGE_PROMPTS`): 15 built-in prompts auto-selected by transcription language (en, zh, hi, es, ar, fr, pt, ru, de, ja, uk, ko, it, tr, pl)
 
 ## [1.1.0] - 2026-02-21
 

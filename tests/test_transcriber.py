@@ -3,6 +3,12 @@
 Documents whisper translate mode behavior:
 - translate=True → --translate, NO -l flag, NO --prompt
 - translate=False → -l <lang>, --prompt "..."
+
+Documents language-prompt resolution:
+- "auto" + known language → auto-select from LANGUAGE_PROMPTS
+- "auto" + unknown language → no prompt
+- Non-empty user prompt → override (use as-is)
+- Empty user prompt → no prompt (disabled)
 """
 from __future__ import annotations
 
@@ -21,7 +27,7 @@ def make_transcriber(tmp_path):
     model = tmp_path / "model.bin"
     model.touch()
 
-    def _make(language="ru", prompt="Test prompt.", timeout=120):
+    def _make(language="ru", prompt="auto", timeout=120):
         from redictum import Transcriber
 
         return Transcriber(
@@ -41,36 +47,52 @@ class TestCommandBuilding:
     @pytest.mark.parametrize(
         "translate, language, prompt, must_have, must_not_have",
         [
-            # Normal transcribe: has -l and --prompt
+            # Normal transcribe with explicit prompt: has -l and --prompt
             (
                 False,
                 "ru",
-                "Prompt text.",
-                ["-l", "ru", "--prompt", "Prompt text."],
+                "Custom prompt.",
+                ["-l", "ru", "--prompt", "Custom prompt."],
                 ["--translate"],
             ),
             # Translate mode: --translate only, NO -l, NO --prompt
             (
                 True,
                 "ru",
-                "Prompt text.",
+                "Custom prompt.",
                 ["--translate"],
                 ["-l", "--prompt"],
             ),
-            # Transcribe with empty language: no -l flag
+            # Transcribe with empty language and custom prompt
             (
                 False,
                 "",
-                "Prompt text.",
-                ["--prompt", "Prompt text."],
+                "Custom prompt.",
+                ["--prompt", "Custom prompt."],
                 ["-l", "--translate"],
             ),
-            # Transcribe with no prompt: no --prompt flag
+            # Auto prompt with known language: selects from LANGUAGE_PROMPTS
             (
                 False,
                 "en",
+                "auto",
+                ["-l", "en", "--prompt"],
+                ["--translate"],
+            ),
+            # Auto prompt with unknown language: no --prompt
+            (
+                False,
+                "xx",
+                "auto",
+                ["-l", "xx"],
+                ["--prompt", "--translate"],
+            ),
+            # Empty prompt (disabled): no --prompt even for known language
+            (
+                False,
+                "ru",
                 "",
-                ["-l", "en"],
+                ["-l", "ru"],
                 ["--prompt", "--translate"],
             ),
             # Translate with empty language and prompt (edge case)
@@ -83,10 +105,12 @@ class TestCommandBuilding:
             ),
         ],
         ids=[
-            "transcribe-ru-with-prompt",
+            "transcribe-ru-custom-prompt",
             "translate-ignores-lang-and-prompt",
-            "transcribe-no-language",
-            "transcribe-no-prompt",
+            "transcribe-no-language-custom-prompt",
+            "transcribe-en-auto-prompt",
+            "transcribe-unknown-lang-auto-no-prompt",
+            "transcribe-ru-prompt-disabled",
             "translate-empty-everything",
         ],
     )
@@ -118,6 +142,73 @@ class TestCommandBuilding:
             assert flag in captured_cmd, f"Expected {flag!r} in {captured_cmd}"
         for flag in must_not_have:
             assert flag not in captured_cmd, f"Unexpected {flag!r} in {captured_cmd}"
+
+
+class TestResolvePrompt:
+    """Verify _resolve_prompt logic: auto vs override vs disabled."""
+
+    def test_auto_known_language(self, make_transcriber):
+        """'auto' + known language → select from LANGUAGE_PROMPTS."""
+        from redictum import LANGUAGE_PROMPTS
+
+        transcriber = make_transcriber(language="ru", prompt="auto")
+        assert transcriber._resolve_prompt() == LANGUAGE_PROMPTS["ru"]
+
+    def test_auto_unknown_language(self, make_transcriber):
+        """'auto' + unknown language → None (no prompt)."""
+        transcriber = make_transcriber(language="xx", prompt="auto")
+        assert transcriber._resolve_prompt() is None
+
+    def test_auto_all_languages(self, make_transcriber):
+        """Every language in LANGUAGE_PROMPTS is resolvable via 'auto'."""
+        from redictum import LANGUAGE_PROMPTS
+
+        for lang in LANGUAGE_PROMPTS:
+            transcriber = make_transcriber(language=lang, prompt="auto")
+            result = transcriber._resolve_prompt()
+            assert result == LANGUAGE_PROMPTS[lang], f"Failed for language: {lang}"
+
+    def test_custom_prompt_overrides(self, make_transcriber):
+        """Non-empty custom prompt takes priority over LANGUAGE_PROMPTS."""
+        transcriber = make_transcriber(language="ru", prompt="My custom prompt.")
+        assert transcriber._resolve_prompt() == "My custom prompt."
+
+    def test_empty_prompt_disabled(self, make_transcriber):
+        """Empty string → no prompt (disabled)."""
+        transcriber = make_transcriber(language="ru", prompt="")
+        assert transcriber._resolve_prompt() is None
+
+
+class TestAutoPromptE2E:
+    """End-to-end: verify auto-prompt reaches whisper command for every language."""
+
+    @pytest.mark.parametrize("lang", [
+        "en", "zh", "hi", "es", "ar", "fr", "pt",
+        "ru", "de", "ja", "uk", "ko", "it", "tr", "pl",
+    ])
+    def test_auto_prompt_in_command(self, lang, make_transcriber, monkeypatch):
+        """prompt='auto' + language → correct LANGUAGE_PROMPTS[lang] in whisper cmd."""
+        from redictum import LANGUAGE_PROMPTS
+
+        transcriber = make_transcriber(language=lang, prompt="auto")
+        captured_cmd = []
+
+        def fake_run(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = "text"
+            r.stderr = ""
+            return r
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        transcriber.transcribe(Path("/tmp/test.wav"))
+
+        assert "--prompt" in captured_cmd, f"--prompt missing for {lang}"
+        idx = captured_cmd.index("--prompt")
+        assert captured_cmd[idx + 1] == LANGUAGE_PROMPTS[lang], (
+            f"Wrong prompt for {lang}"
+        )
 
 
 class TestTranscribeResult:

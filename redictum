@@ -83,7 +83,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "whisper_cli": "~/whisper.cpp/build/bin/whisper-cli",
         "whisper_model": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin",
         "whisper_language": "auto",
-        "whisper_prompt": "Proper conversational speech with correct punctuation: commas, periods, question marks and exclamation marks. Anglicisms, technical terms and abbreviations are used.",
+        "whisper_prompt": "auto",
         "whisper_timeout": 120,
     },
     "audio": {
@@ -135,9 +135,11 @@ whisper_model = "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin"
 # or set explicitly: "en", "ru", "uk", "de", "fr"
 whisper_language = "auto"
 
-# Optional prompt to guide whisper transcription (empty = "" or leave blank)
-# Helps with domain-specific vocabulary and punctuation
-whisper_prompt = "Proper conversational speech with correct punctuation: commas, periods, question marks and exclamation marks. Anglicisms, technical terms and abbreviations are used."
+# Prompt to guide whisper transcription
+# "auto" = select by language (built-in prompts for 15 languages)
+# "" = no prompt (disable)
+# Custom text = use as-is, regardless of language
+whisper_prompt = "auto"
 
 # Maximum time (seconds) to wait for transcription to finish
 whisper_timeout = 120
@@ -1661,6 +1663,25 @@ def _detect_language() -> str:
     return ""
 
 
+LANGUAGE_PROMPTS: dict[str, str] = {
+    "en": "So, here's the thing: we had a meeting yesterday — about fifteen people showed up. The agenda covered three points: scheduling, budget, and next steps. 'Can we finish by Friday?' someone asked. Honestly, I think we can… but it won't be easy! Let me explain why.",
+    "zh": "这件事情是这样的：我们昨天开了个会——大概有十五个人参加。议程包括三个议题：时间安排、预算和下一步计划。有人问：「我们能在周五前完成吗？」老实说，我觉得可以……但不会很轻松！让我来解释一下。",
+    "hi": "देखिए, मामला कुछ ऐसा है: कल हमारी बैठक हुई — करीब पंद्रह लोग आए। एजेंडे में तीन बिंदु थे: समयसारणी, बजट और अगले कदम। किसी ने पूछा: \u201cक्या हम शुक्रवार तक खत्म कर सकते हैं?\u201d सच कहूं तो, शायद… लेकिन आसान नहीं होगा!",
+    "es": "Mira, la cosa es así: ayer tuvimos una reunión — llegaron unas quince personas. El orden del día tenía tres puntos: horarios, presupuesto y próximos pasos. ¿Podemos terminar para el viernes? — preguntó alguien. Honestamente, creo que sí… ¡pero no será fácil! Déjame explicarte por qué.",
+    "ar": "الأمر كالتالي: كان لدينا اجتماع أمس — حضر خمسة عشر شخصاً تقريباً. تضمّن جدول الأعمال ثلاثة بنود: الجدولة الزمنية، الميزانية، والخطوات التالية. سأل أحدهم: «هل نستطيع الانتهاء بحلول الجمعة؟» بصراحة، أعتقد ذلك… لكنّها لن تكون سهلة!",
+    "fr": "Voilà la situation\u00a0: hier, on a eu une réunion — une quinzaine de personnes étaient présentes. L'ordre du jour comportait trois points\u00a0: le planning, le budget et les prochaines étapes. «\u00a0Peut-on terminer d'ici vendredi\u00a0?\u00a0» a demandé quelqu'un. Honnêtement, je pense que oui… mais ce ne sera pas facile\u00a0! Laissez-moi vous expliquer pourquoi.",
+    "pt": "Veja bem, a situação é a seguinte: tivemos uma reunião ontem — umas quinze pessoas apareceram. A pauta tinha três pontos: cronograma, orçamento e próximos passos. \"Conseguimos terminar até sexta?\" — perguntou alguém. Sinceramente, acho que sim… mas não será fácil! Deixa eu explicar o porquê.",
+    "ru": "Вот в чём дело: вчера у нас была встреча — примерно пятнадцать человек. Обсудили три вопроса: расписание, бюджет и дальнейшие шаги. «Мы успеем до пятницы?» — спросил кто-то. Честно говоря, думаю, да… но лёгко не будет! Дайте объясню.",
+    "de": "Also, die Sache ist so: Gestern hatten wir eine Besprechung \u2014 etwa f\u00fcnfzehn Leute sind gekommen. Auf der Tagesordnung standen drei Punkte: Zeitplanung, Budget und n\u00e4chste Schritte. \u201EK\u00f6nnen wir das bis Freitag abschlie\u00dfen?\u201C fragte jemand. Ehrlich gesagt denke ich, wir schaffen das\u2026 aber es wird nicht einfach! Ich erkl\u00e4re euch warum.",
+    "ja": "さて、こういうことです：昨日ミーティングがありました——十五人ほど参加しました。議題は三つありました：スケジュール、予算、次のステップです。「金曜日までに終わりますか？」と誰かが言いました。正直に言えば、できると思います…でも簡単ではないはずです！理由を説明させてください。",
+    "uk": "Отже, справа така: вчора у нас була зустріч — десь п'ятнадцять осіб. Обговорили три питання: розклад, бюджет і подальші кроки. «Успіємо до п'ятниці?» — запитав хтось. Чесно кажучи, думаю, що так… але легко не буде! Дайте поясню, чому.",
+    "ko": "자, 상황은 이러합니다: 어제 회의가 있었는데 — 대략 열다섯 명이 왔어요. 안건은 세 가지였죠: 일정, 예산, 그리고 다음 단계입니다. 「금요일까지 끝낼 수 있을까요?」 누군가 물었어요. 솔직히 말하면, 가능하다고 생각해요… 하지만 쉬운 일은 아니에요! 이유를 설명해 드릴게요.",
+    "it": "Ecco la situazione: ieri abbiamo avuto una riunione — una quindicina di persone si è presentata. L'ordine del giorno comprendeva tre punti: la pianificazione, il budget e i prossimi passi. «Riusciamo a finire entro venerdì?» — ha chiesto qualcuno. Sinceramente, credo di sì… ma non sarà facile! Vi spiego il perché.",
+    "tr": "Bak, durum şöyle: dün bir toplantı vardı — yaklaşık on beş kişi geldi. Gündemdeki üç madde şunlardı: takvim, bütçe ve sonraki adımlar. \"Cuma'ya kadar bitirebilir miyiz?\" — diye sordu biri. Dürüst olmak gerekirse, sanırım evet… ama kolay olmayacak! Neden olduğunu açıklayım.",
+    "pl": "Wi\u0119c, sprawa wygl\u0105da tak: wczoraj mieli\u015bmy spotkanie \u2014 przysz\u0142o oko\u0142o pi\u0119tnastu os\u00f3b. Agenda obejmowa\u0142a trzy punkty: harmonogram, bud\u017cet i kolejne kroki. \u201ECzy zd\u0105\u017cymy do pi\u0105tku?\u201C \u2014 zapyta\u0142 kto\u015b. Szczerze m\u00f3wi\u0105c, my\u015bl\u0119, \u017ce tak\u2026 ale nie b\u0119dzie \u0142atwo! Wyja\u015bni\u0119 wam dlaczego.",
+}
+
+
 class Transcriber:
     """Transcribe audio via whisper.cpp CLI."""
 
@@ -1688,6 +1709,20 @@ class Transcriber:
         self._prompt = prompt
         self._timeout = timeout
 
+    def _resolve_prompt(self) -> str | None:
+        """Pick the right prompt for transcription.
+
+        Priority:
+        1. "auto" -> select from LANGUAGE_PROMPTS by language
+        2. Non-empty string -> use as-is (user override)
+        3. Empty string -> no prompt (disabled)
+        """
+        if self._prompt == "auto":
+            return LANGUAGE_PROMPTS.get(self._language)
+        if self._prompt:
+            return self._prompt
+        return None
+
     def transcribe(self, audio_path: Path, translate: bool = False) -> str:
         """Transcribe the given audio file to text.
 
@@ -1714,8 +1749,10 @@ class Transcriber:
             cmd.append("--translate")
         elif self._language:
             cmd.extend(["-l", self._language])
-        if not translate and self._prompt:
-            cmd.extend(["--prompt", self._prompt])
+        if not translate:
+            prompt = self._resolve_prompt()
+            if prompt:
+                cmd.extend(["--prompt", prompt])
 
         logging.info(
             "Transcribing: %s (translate: %s)", audio_path.name, translate,
