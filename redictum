@@ -1683,6 +1683,113 @@ LANGUAGE_PROMPTS: dict[str, str] = {
     "pl": "Wi\u0119c, sprawa wygl\u0105da tak: wczoraj mieli\u015bmy spotkanie \u2014 przysz\u0142o oko\u0142o pi\u0119tnastu os\u00f3b. Agenda obejmowa\u0142a trzy punkty: harmonogram, bud\u017cet i kolejne kroki. \u201ECzy zd\u0105\u017cymy do pi\u0105tku?\u201C \u2014 zapyta\u0142 kto\u015b. Szczerze m\u00f3wi\u0105c, my\u015bl\u0119, \u017ce tak\u2026 ale nie b\u0119dzie \u0142atwo! Wyja\u015bni\u0119 wam dlaczego.",
 }
 
+LANGUAGE_NAMES: dict[str, str] = {
+    "en": "English",
+    "zh": "中文",
+    "hi": "हिन्दी",
+    "es": "Español",
+    "ar": "العربية",
+    "fr": "Français",
+    "pt": "Português",
+    "ru": "Русский",
+    "de": "Deutsch",
+    "ja": "日本語",
+    "uk": "Українська",
+    "ko": "한국어",
+    "it": "Italiano",
+    "tr": "Türkçe",
+    "pl": "Polski",
+}
+
+
+def _show_language_status(config: dict[str, Any]) -> str:
+    """Show current language + prompt status from config.
+
+    Returns:
+        Detected language code (from locale).
+    """
+    dep = config.get("dependency", {})
+    lang = dep.get("whisper_language", "auto")
+    prompt = dep.get("whisper_prompt", "auto")
+    detected = _detect_language()
+
+    _rprint("[bold]Current language settings:[/bold]")
+    if lang == "auto":
+        if detected:
+            name = LANGUAGE_NAMES.get(detected, detected)
+            _rprint(f"  Language: [cyan]auto[/cyan] (detected: {detected} — {name})")
+        else:
+            _rprint("  Language: [cyan]auto[/cyan] (could not detect from locale)")
+    else:
+        name = LANGUAGE_NAMES.get(lang, lang)
+        _rprint(f"  Language: [cyan]{lang}[/cyan] ({name})")
+
+    if prompt == "auto":
+        _rprint("  Prompt:   [cyan]auto[/cyan] (selected by language)")
+    elif prompt:
+        short = prompt[:60] + "..." if len(prompt) > 60 else prompt
+        _rprint(f"  Prompt:   {short}")
+    else:
+        _rprint("  Prompt:   [yellow](empty)[/yellow]")
+
+    return detected
+
+
+def _language_wizard(detected_lang: str) -> tuple[str, str] | None:
+    """Interactive language selector wizard.
+
+    Args:
+        detected_lang: Language code detected from system locale.
+
+    Returns:
+        ``(language, prompt)`` tuple, or ``None`` if user cancels.
+    """
+    codes = list(LANGUAGE_NAMES.keys())
+
+    _rprint("\n[bold]Select transcription language:[/bold]\n")
+    for i, code in enumerate(codes, 1):
+        name = LANGUAGE_NAMES[code]
+        marker = " [green]★[/green]" if code == detected_lang else ""
+        _rprint(f"  {i:2d}. {code} — {name}{marker}")
+    _rprint(f"   0. Other (enter code manually)")
+    _rprint(f"   A. Auto (detect from system locale)\n")
+
+    try:
+        choice = input("Enter choice: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+
+    if not choice:
+        return None
+
+    if choice.upper() == "A":
+        return ("auto", "auto")
+
+    if choice == "0":
+        try:
+            code = input("Enter language code (e.g. 'nl', 'sv'): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if not code:
+            return None
+        prompt = LANGUAGE_PROMPTS.get(code, "")
+        return (code, prompt)
+
+    try:
+        idx = int(choice)
+    except ValueError:
+        _rprint(f"[red]Invalid choice: {choice}[/red]")
+        return None
+
+    if 1 <= idx <= len(codes):
+        code = codes[idx - 1]
+        return (code, LANGUAGE_PROMPTS.get(code, ""))
+
+    _rprint(f"[red]Invalid choice: {choice}[/red]")
+    return None
+
 
 class Transcriber:
     """Transcribe audio via whisper.cpp CLI."""
@@ -2426,6 +2533,7 @@ class RedictumApp:
             ready = True
 
         if first_run:
+            self._first_run_language_check(self._config)
             self._show_config_hint()
 
         setup_logging(self._log_path)
@@ -2460,6 +2568,7 @@ class RedictumApp:
             self._config = self.init()
 
         if first_run:
+            self._first_run_language_check(self._config)
             self._show_config_hint()
 
         daemon = Daemon(self._pid_path, self._log_path)
@@ -2507,6 +2616,86 @@ class RedictumApp:
         installer = WhisperInstaller(self._config_mgr)
         installer.install()
         return EXIT_OK
+
+    def run_language(self) -> int:
+        """Change transcription language via interactive wizard.
+
+        Returns:
+            Exit code.
+        """
+        self._config = self._load_config()
+        detected = _show_language_status(self._config)
+
+        if not _confirm("Change language?", default=True):
+            return EXIT_OK
+
+        result = _language_wizard(detected)
+        if result is None:
+            return EXIT_OK
+
+        lang, prompt = result
+        if lang == "auto":
+            _rprint(f"\n  whisper_language = [cyan]auto[/cyan]")
+            _rprint(f"  whisper_prompt   = [cyan]auto[/cyan]")
+        else:
+            lang_name = LANGUAGE_NAMES.get(lang, lang)
+            short = prompt[:60] + "..." if len(prompt) > 60 else prompt
+            _rprint(f"\n  whisper_language = [cyan]{lang}[/cyan] ({lang_name})")
+            _rprint(f"  whisper_prompt   = {short}")
+
+        # Check daemon
+        daemon = Daemon(self._pid_path, self._log_path)
+        if daemon.status() is not None:
+            _rprint("\n[yellow]Daemon is running. Restart it for changes to take effect.[/yellow]")
+
+        if not _confirm("\nSave to config?", default=True):
+            return EXIT_OK
+
+        self._config_mgr.update({
+            "whisper_language": lang,
+            "whisper_prompt": prompt,
+        })
+        _rprint("[green]Language settings saved.[/green]")
+        return EXIT_OK
+
+    def _first_run_language_check(self, config: dict[str, Any]) -> None:
+        """Offer to change language during first run.
+
+        Args:
+            config: Loaded configuration dictionary.
+        """
+        detected = _detect_language()
+        if detected:
+            name = LANGUAGE_NAMES.get(detected, detected)
+            _rprint(f"\nLanguage detected: [cyan]{detected}[/cyan] ({name}) from system locale.")
+        else:
+            _rprint("\nLanguage: could not detect from system locale (will use auto).")
+
+        if not _confirm("Change language?", default=False):
+            return
+
+        result = _language_wizard(detected)
+        if result is None:
+            return
+
+        lang, prompt = result
+        if lang == "auto":
+            _rprint(f"\n  whisper_language = [cyan]auto[/cyan]")
+            _rprint(f"  whisper_prompt   = [cyan]auto[/cyan]")
+        else:
+            lang_name = LANGUAGE_NAMES.get(lang, lang)
+            short = prompt[:60] + "..." if len(prompt) > 60 else prompt
+            _rprint(f"\n  whisper_language = [cyan]{lang}[/cyan] ({lang_name})")
+            _rprint(f"  whisper_prompt   = {short}")
+
+        if not _confirm("\nSave to config?", default=True):
+            return
+
+        self._config_mgr.update({
+            "whisper_language": lang,
+            "whisper_prompt": prompt,
+        })
+        _rprint("[green]Language settings saved.[/green]")
 
     def _main_loop(self, stop_event: threading.Event) -> None:
         """Main loop: push-to-talk → record → normalize → transcribe → paste."""
@@ -2804,6 +2993,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("stop", help="Stop the daemon")
     sub.add_parser("status", help="Show daemon status")
     sub.add_parser("whisper", help="Setup whisper.cpp (install, check, reconfigure)")
+    sub.add_parser("language", help="Change transcription language")
 
     return parser
 
@@ -2839,6 +3029,8 @@ def main() -> int:
             return app.run_status()
         if args.command == "whisper":
             return app.run_whisper()
+        if args.command == "language":
+            return app.run_language()
     except RedictumError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_ERROR

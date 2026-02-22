@@ -103,7 +103,7 @@ class TestBuildParser:
 
         parser = build_parser()
         # Check that known subcommands parse without error
-        for cmd in ("start", "stop", "status", "whisper"):
+        for cmd in ("start", "stop", "status", "whisper", "language"):
             args = parser.parse_args([cmd])
             assert args.command == cmd
 

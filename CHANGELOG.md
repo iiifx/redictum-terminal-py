@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Language selector wizard: `./redictum language` to change transcription language
+- First-run language prompt: offer to change auto-detected language on first start
+
 ### Fixed
 - Fix race condition: read `_current_mode` under `state_lock` in `on_release()`
 - Validate whisper CLI and model paths on startup with clear error messages
