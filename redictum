@@ -2483,7 +2483,7 @@ class RedictumApp:
                 if state != STATE_RECORDING:
                     return
                 state = STATE_PROCESSING
-            captured_mode = _current_mode
+                captured_mode = _current_mode
 
             def worker() -> None:
                 nonlocal state

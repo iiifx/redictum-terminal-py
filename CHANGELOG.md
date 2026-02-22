@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Fix race condition: read `_current_mode` under `state_lock` in `on_release()`
+
 ## [1.1.0] - 2026-02-21
 
 ### Fixed
