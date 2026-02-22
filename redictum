@@ -1553,8 +1553,10 @@ class AudioRecorder:
             self._process.kill()
             self._process.wait()
             logging.warning("arecord did not stop gracefully, killed")
-        if self._process.returncode != 0:
-            logging.error("arecord exited with code %d", self._process.returncode)
+        rc = self._process.returncode
+        # arecord returns 1 or -15 (SIGTERM) when we terminate it — expected.
+        if rc not in (0, 1, -signal.SIGTERM):
+            logging.error("arecord exited with code %d", rc)
         self._process = None
 
         path = self._current_file
