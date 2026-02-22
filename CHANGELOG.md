@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - Language selector wizard: `./redictum language` to change transcription language
 - First-run language prompt: offer to change auto-detected language on first start
+- Comprehensive diagnostics logging: dependency checks, package installation, and user prompt responses are now written to the log file
+- System information logged at startup: OS, kernel, Python, GPU, CUDA, RAM, locale
 
 ### Fixed
 - Fix race condition: read `_current_mode` under `state_lock` in `on_release()`

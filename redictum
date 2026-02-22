@@ -12,6 +12,7 @@ import atexit
 import logging
 import math
 import os
+import platform
 import re
 import signal
 import shutil
@@ -245,10 +246,14 @@ def _confirm(prompt: str, default: bool = False) -> bool:
         answer = input(f"{prompt} {hint}: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
+        logging.info("Prompt: %r → no (EOF/interrupt)", prompt)
         return False
     if not answer:
-        return default
-    return answer in ("y", "yes")
+        result = default
+    else:
+        result = answer in ("y", "yes")
+    logging.info("Prompt: %r → %s", prompt, "yes" if result else "no")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -559,8 +564,10 @@ class Diagnostics:
         label = f"Python {ver.major}.{ver.minor}.{ver.micro}"
         if ver >= (3, 10):
             _rprint(f"  [green]\u2713[/green] {label}")
+            logging.info("Check: %s — OK", label)
         else:
             _rprint(f"  [red]\u2717[/red] {label}")
+            logging.error("Check: %s — FAIL (need 3.10+)", label)
             raise RedictumError(
                 f"Python 3.10+ is required, found {label}."
             )
@@ -568,8 +575,10 @@ class Diagnostics:
     def _check_linux(self) -> None:
         if sys.platform == "linux":
             _rprint("  [green]\u2713[/green] Linux")
+            logging.info("Check: Linux — OK")
         else:
             _rprint(f"  [red]\u2717[/red] Linux — detected {sys.platform}")
+            logging.error("Check: Linux — FAIL (detected %s)", sys.platform)
             raise RedictumError(
                 f"Linux is required, detected platform: {sys.platform}."
             )
@@ -577,8 +586,10 @@ class Diagnostics:
     def _check_pulseaudio(self) -> None:
         if shutil.which("paplay"):
             _rprint("  [green]\u2713[/green] PulseAudio (paplay)")
+            logging.info("Check: PulseAudio — OK")
         else:
             _rprint("  [red]\u2717[/red] PulseAudio (paplay) \u2014 not found")
+            logging.error("Check: PulseAudio — MISSING")
             raise RedictumError(
                 "PulseAudio (paplay) is required but not found.\n"
                 "Install it manually: sudo apt install pulseaudio-utils"
@@ -587,8 +598,10 @@ class Diagnostics:
     def _check_alsa(self) -> None:
         if shutil.which("arecord"):
             _rprint("  [green]\u2713[/green] ALSA (arecord)")
+            logging.info("Check: ALSA — OK")
         else:
             _rprint("  [red]\u2717[/red] ALSA (arecord) \u2014 not found")
+            logging.error("Check: ALSA — MISSING")
             raise RedictumError(
                 "ALSA (arecord) is required but not found.\n"
                 "Install it manually: sudo apt install alsa-utils"
@@ -599,17 +612,20 @@ class Diagnostics:
         device = self._config.get("audio", {}).get("recording_device", "auto")
         if device != "auto":
             _rprint(f"  [green]\u2713[/green] Audio device: {device} (manual)")
+            logging.info("Check: Audio device: %s (manual)", device)
             return
 
         candidates = ["pulse", "default"]
         for candidate in candidates:
             if self._test_audio_device(candidate):
                 _rprint(f"  [green]\u2713[/green] Audio device: {candidate} (auto-detected)")
+                logging.info("Check: Audio device: %s (auto)", candidate)
                 self._config_mgr.update({"recording_device": candidate})
                 self._config["audio"]["recording_device"] = candidate
                 return
 
         _rprint("  [red]\u2717[/red] Audio device \u2014 no working device found")
+        logging.error("Check: Audio device — no working device found")
         raise RedictumError(
             "No working audio recording device found.\n"
             "Tried: " + ", ".join(candidates) + "\n"
@@ -641,10 +657,13 @@ class Diagnostics:
             Path(path).unlink(missing_ok=True)
 
     def _check_x11(self) -> None:
-        if os.environ.get("DISPLAY"):
+        display = os.environ.get("DISPLAY")
+        if display:
             _rprint("  [green]\u2713[/green] X11 (DISPLAY)")
+            logging.info("Check: X11 DISPLAY=%s — OK", display)
         else:
             _rprint("  [red]\u2717[/red] X11 (DISPLAY) \u2014 not set")
+            logging.error("Check: X11 DISPLAY — not set")
             raise RedictumError(
                 "X11 display is required but DISPLAY is not set.\n"
                 "Run from an X11 session or set DISPLAY manually."
@@ -703,6 +722,10 @@ class Diagnostics:
             else:
                 _rprint(f"  [red]\u2717[/red] {name}")
                 missing.append(package)
+        if missing:
+            logging.info("Missing apt: %s", missing)
+        else:
+            logging.info("All apt packages present")
         return missing
 
     def _find_missing_pip(self) -> list[str]:
@@ -715,13 +738,19 @@ class Diagnostics:
             except ImportError:
                 _rprint(f"  [red]\u2717[/red] {pip_name}")
                 missing.append(pip_name)
+        if missing:
+            logging.info("Missing pip: %s", missing)
+        else:
+            logging.info("All pip packages present")
         return missing
 
     def _install_apt(self, packages: list[str]) -> bool:
         """Run sudo apt install for the given packages. Return success."""
         cmd = ["sudo", "apt", "install", "-y", *packages]
         _rprint(f"[dim]Running: {' '.join(cmd)}[/dim]")
+        logging.info("Running: %s", " ".join(cmd))
         result = subprocess.run(cmd)
+        logging.info("apt install — exit code %d", result.returncode)
         return result.returncode == 0
 
     def _install_pip(self, packages: list[str]) -> bool:
@@ -736,8 +765,10 @@ class Diagnostics:
         # 1. Try normal pip install
         cmd = [sys.executable, "-m", "pip", "install", *packages]
         _rprint(f"[dim]Running: {' '.join(cmd)}[/dim]")
+        logging.info("Running: %s", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
+            logging.info("pip install — exit code 0")
             return True
 
         # Check if this is PEP 668 block
@@ -745,6 +776,7 @@ class Diagnostics:
             # Some other error — show it
             if result.stderr:
                 _rprint(f"[red]{result.stderr.strip()}[/red]")
+                logging.warning("pip install failed: %s", result.stderr.strip())
             return False
 
         _rprint("[yellow]System Python is externally managed (PEP 668).[/yellow]")
@@ -756,19 +788,24 @@ class Diagnostics:
             if p in PIP_APT_FALLBACK
         ]
         if apt_packages and self._has_apt():
+            logging.info("PEP 668: trying apt fallback")
             _rprint(f"[dim]Trying apt: {' '.join(apt_packages)}[/dim]")
             if self._install_apt(apt_packages):
                 return True
 
         # 3. Try pip with --break-system-packages
+        logging.info("PEP 668: trying --break-system-packages")
         cmd = [
             sys.executable, "-m", "pip", "install",
             "--break-system-packages", *packages,
         ]
         _rprint(f"[dim]Running: {' '.join(cmd)}[/dim]")
+        logging.info("Running: %s", " ".join(cmd))
         result = subprocess.run(cmd)
         if result.returncode == 0:
+            logging.info("pip install — exit code 0")
             return True
+        logging.warning("pip install --break-system-packages — exit code %d", result.returncode)
 
         # 4. All failed — manual instructions
         _rprint(
@@ -810,11 +847,13 @@ class Diagnostics:
             _rprint("  [green]\u2713[/green] whisper.cpp")
         else:
             _rprint(f"  [yellow]\u26a0[/yellow] whisper.cpp not found at {cli_path}")
+        logging.info("Whisper CLI: %s — %s", cli_path, "found" if cli_ok else "missing")
 
         if model_ok:
             _rprint("  [green]\u2713[/green] whisper model")
         else:
             _rprint(f"  [yellow]\u26a0[/yellow] whisper model not found at {model_path}")
+        logging.info("Whisper model: %s — %s", model_path, "found" if model_ok else "missing")
 
         if cli_ok and model_ok:
             return
@@ -872,7 +911,9 @@ class WhisperInstaller:
 
     def _fresh_install(self) -> None:
         """Full install: ensure CUDA, download, build, download model."""
+        logging.info("Whisper: fresh install")
         cuda_available = self._ensure_cuda()
+        logging.info("Whisper: CUDA available=%s", cuda_available)
         self._clone()
         self._build(use_cuda=cuda_available)
 
@@ -1020,8 +1061,10 @@ class WhisperInstaller:
                 "Install CUDA toolkit manually:\n"
                 "    https://developer.nvidia.com/cuda-downloads"
             )
+            logging.warning("CUDA: cannot detect Ubuntu version")
             return False
 
+        logging.info("CUDA: detected base %s", distro)
         _rprint(f"  Detected base: {distro}")
 
         # Download and install keyring
@@ -1041,35 +1084,45 @@ class WhisperInstaller:
                 _rprint("  [red]Neither curl nor wget found[/red]")
                 return False
 
+            logging.info("CUDA: downloading keyring")
             if subprocess.run(dl_cmd).returncode != 0:
                 _rprint("  [yellow]\u26a0[/yellow] Failed to download CUDA keyring")
+                logging.warning("CUDA: keyring download failed")
                 return False
 
             _rprint("  [dim]Installing CUDA keyring and toolkit (sudo required)...[/dim]")
+            logging.info("CUDA: installing keyring (dpkg)")
             result = subprocess.run(["sudo", "dpkg", "-i", str(keyring_deb)])
             if result.returncode != 0:
                 _rprint("  [yellow]\u26a0[/yellow] Failed to install CUDA keyring")
+                logging.warning("CUDA: dpkg keyring — exit code %d", result.returncode)
                 return False
 
+            logging.info("CUDA: apt-get update")
             result = subprocess.run(["sudo", "apt-get", "update", "-qq"])
             if result.returncode != 0:
                 _rprint("  [yellow]\u26a0[/yellow] Failed to update package list")
+                logging.warning("CUDA: apt-get update — exit code %d", result.returncode)
                 return False
 
+            logging.info("CUDA: apt-get install cuda-toolkit")
             result = subprocess.run(
                 ["sudo", "apt-get", "install", "-y", "cuda-toolkit"],
             )
             if result.returncode != 0:
                 _rprint("  [yellow]\u26a0[/yellow] CUDA toolkit installation failed")
+                logging.warning("CUDA: apt install — exit code %d", result.returncode)
                 return False
 
             # Verify new nvcc
             ver = self._get_nvcc_version()
             if ver and ver >= self.CUDA_MIN_VERSION:
                 _rprint(f"  [green]\u2713[/green] CUDA toolkit {ver} installed")
+                logging.info("CUDA: toolkit %d installed successfully", ver)
                 return True
 
             _rprint("  [yellow]\u26a0[/yellow] CUDA installed but nvcc not found in PATH")
+            logging.warning("CUDA: installed but nvcc not found in PATH")
             return False
         finally:
             keyring_deb.unlink(missing_ok=True)
@@ -1078,6 +1131,7 @@ class WhisperInstaller:
 
     def _clone(self) -> None:
         """Download and extract the whisper.cpp release tarball."""
+        logging.info("Whisper: cloning repo %s", self.WHISPER_VERSION)
         url = self.TARBALL_URL.format(version=self.WHISPER_VERSION)
         fd, tarball_path = tempfile.mkstemp(suffix=".tar.gz", prefix="whisper-cpp-")
         tarball = Path(tarball_path)
@@ -1123,6 +1177,7 @@ class WhisperInstaller:
 
     def _build(self, use_cuda: bool) -> None:
         """Configure and build whisper.cpp."""
+        logging.info("Whisper: build started (CUDA=%s)", use_cuda)
         # Clean previous build
         build_dir = self._install_dir / "build"
         if build_dir.exists():
@@ -1181,6 +1236,7 @@ class WhisperInstaller:
                 return
             raise RedictumError("cmake build failed")
         _rprint(f"  [green]\u2713[/green] Build complete ({mode})")
+        logging.info("Whisper: build complete — exit code %d", result.returncode)
 
     # -- Model ---------------------------------------------------------------
 
@@ -1223,6 +1279,7 @@ class WhisperInstaller:
             return model_path
 
         url = f"{self.HF_BASE}/{filename}"
+        logging.info("Whisper: downloading model %s", filename)
         _rprint(f"  Downloading {filename}...")
 
         # Prefer curl, fall back to wget
@@ -1242,6 +1299,7 @@ class WhisperInstaller:
                 model_path.unlink()
             raise RedictumError(f"Model download failed: {filename}")
 
+        logging.info("Whisper: download complete")
         _rprint(f"  [green]\u2713[/green] Model downloaded: {filename}")
         return model_path
 
@@ -1329,17 +1387,93 @@ class WhisperInstaller:
             "whisper_cli": cli_str,
             "whisper_model": model_str,
         })
+        logging.info("Whisper: config updated cli=%s model=%s", cli_str, model_str)
         _rprint("  [green]\u2713[/green] Config updated")
 
 
-def setup_logging(log_path: Path) -> None:
+def setup_logging(log_path: Path, *, force: bool = False) -> None:
     """Configure file-based logging. Called at daemon and interactive startup."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[logging.FileHandler(log_path, encoding="utf-8")],
+        force=force,
     )
+
+
+def _log_system_info() -> None:
+    """Log system information snapshot at startup. Never raises."""
+    try:
+        # OS
+        try:
+            text = Path("/etc/os-release").read_text()
+            m = re.search(r'PRETTY_NAME="?([^"\n]+)"?', text)
+            os_name = m.group(1) if m else platform.platform()
+        except OSError:
+            os_name = platform.platform()
+        kernel = platform.release()
+
+        # Python
+        py_ver = sys.version.split()[0]
+
+        # Locale & display
+        locale_val = os.environ.get("LANG", "unknown")
+        display_val = os.environ.get("DISPLAY", "unset")
+
+        # GPU & CUDA via nvidia-smi
+        gpu_name = "N/A"
+        gpu_driver = "N/A"
+        cuda_ver = "N/A"
+        try:
+            nv = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,driver_version",
+                 "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if nv.returncode == 0 and nv.stdout.strip():
+                parts = nv.stdout.strip().split(", ", 1)
+                gpu_name = parts[0]
+                gpu_driver = parts[1] if len(parts) > 1 else "N/A"
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        try:
+            nv2 = subprocess.run(
+                ["nvidia-smi"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if nv2.returncode == 0:
+                m = re.search(r"CUDA Version:\s*([\d.]+)", nv2.stdout)
+                if m:
+                    cuda_ver = m.group(1)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+
+        # RAM
+        ram_gb = "N/A"
+        try:
+            for line in Path("/proc/meminfo").read_text().splitlines():
+                if line.startswith("MemTotal:"):
+                    kb = int(line.split()[1])
+                    ram_gb = f"{kb / 1024 / 1024:.1f} GB"
+                    break
+        except (OSError, ValueError, IndexError):
+            pass
+
+        logging.info(
+            "System: %s (kernel %s)\n"
+            "  Python:  %s\n"
+            "  Locale:  %s\n"
+            "  Display: %s\n"
+            "  GPU:     %s (driver %s)\n"
+            "  CUDA:    %s\n"
+            "  RAM:     %s",
+            os_name, kernel, py_ver, locale_val, display_val,
+            gpu_name, gpu_driver, cuda_ver, ram_gb,
+        )
+    except Exception:
+        logging.warning("Failed to collect system info", exc_info=True)
 
 
 class Daemon:
@@ -1449,8 +1583,8 @@ class Daemon:
         os.close(devnull)
         os.close(log_fd)
 
-        # Setup logging
-        setup_logging(self._log_path)
+        # Re-init logging in forked child (clears parent handlers)
+        setup_logging(self._log_path, force=True)
 
         # Write PID file and register cleanup
         self._write_pid()
@@ -2520,6 +2654,9 @@ class RedictumApp:
         Returns:
             Exit code.
         """
+        setup_logging(self._log_path)
+        _log_system_info()
+
         first_run = not self._is_initialized()
         if not first_run:
             self._config = self.init_quick()
@@ -2535,8 +2672,6 @@ class RedictumApp:
         if first_run:
             self._first_run_language_check(self._config)
             self._show_config_hint()
-
-        setup_logging(self._log_path)
 
         stop_event = threading.Event()
 
@@ -2559,6 +2694,9 @@ class RedictumApp:
         Returns:
             Exit code.
         """
+        setup_logging(self._log_path)
+        _log_system_info()
+
         first_run = not self._is_initialized()
         if not first_run:
             self._config = self.init_quick()
