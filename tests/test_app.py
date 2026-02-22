@@ -181,3 +181,10 @@ class TestApplyOverrides:
         config = {"dependency": {"whisper_timeout": 120}}
         with pytest.raises(RedictumError, match="Invalid value"):
             _apply_overrides(config, ["dependency.whisper_timeout=abc"])
+
+    def test_bad_float_raises(self):
+        from redictum import _apply_overrides, RedictumError
+
+        config = {"clipboard": {"paste_restore_delay": 0.3}}
+        with pytest.raises(RedictumError, match="Invalid value"):
+            _apply_overrides(config, ["clipboard.paste_restore_delay=slow"])

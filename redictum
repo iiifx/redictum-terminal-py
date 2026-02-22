@@ -268,6 +268,7 @@ class ConfigManager:
     })
     _FLOAT_KEYS: frozenset[str] = frozenset({
         "hotkey_hold_delay",
+        "paste_restore_delay",
     })
 
     def __init__(self, script_dir: Path) -> None:
@@ -422,12 +423,16 @@ class ConfigManager:
             try:
                 return int(value)
             except ValueError:
-                return value
+                raise RedictumError(
+                    f"Config '{key}': expected integer, got '{value}'"
+                )
         if key in cls._FLOAT_KEYS:
             try:
                 return float(value)
             except ValueError:
-                return value
+                raise RedictumError(
+                    f"Config '{key}': expected number, got '{value}'"
+                )
         return value
 
     @staticmethod

@@ -140,6 +140,29 @@ class TestParseValue:
 
         assert ConfigManager._parse_value("whisper_language", "auto") == "auto"
 
+    def test_invalid_int_raises(self):
+        from redictum import ConfigManager, RedictumError
+
+        with pytest.raises(RedictumError, match="expected integer"):
+            ConfigManager._parse_value("whisper_timeout", "fast")
+
+    def test_invalid_float_raises(self):
+        from redictum import ConfigManager, RedictumError
+
+        with pytest.raises(RedictumError, match="expected number"):
+            ConfigManager._parse_value("hotkey_hold_delay", "abc")
+
+    def test_paste_restore_delay_parsed(self):
+        from redictum import ConfigManager
+
+        assert ConfigManager._parse_value("paste_restore_delay", "0.5") == pytest.approx(0.5)
+
+    def test_paste_restore_delay_invalid_raises(self):
+        from redictum import ConfigManager, RedictumError
+
+        with pytest.raises(RedictumError, match="expected number"):
+            ConfigManager._parse_value("paste_restore_delay", "slow")
+
 
 class TestExpandPaths:
     """ConfigManager._expand_paths: ~ expansion for whisper_cli/whisper_model."""
@@ -194,6 +217,24 @@ class TestLoad:
         config = mgr.load()
         # Falls back to defaults
         assert "dependency" in config
+
+    def test_invalid_int_in_ini_raises(self, config_dir):
+        from redictum import RedictumError
+
+        tmp_path, mgr = config_dir
+        ini_text = "[dependency]\nwhisper_timeout = fast\n"
+        (tmp_path / "config.ini").write_text(ini_text, encoding="utf-8")
+        with pytest.raises(RedictumError, match="expected integer"):
+            mgr.load()
+
+    def test_invalid_float_in_ini_raises(self, config_dir):
+        from redictum import RedictumError
+
+        tmp_path, mgr = config_dir
+        ini_text = "[input]\nhotkey_hold_delay = abc\n"
+        (tmp_path / "config.ini").write_text(ini_text, encoding="utf-8")
+        with pytest.raises(RedictumError, match="expected number"):
+            mgr.load()
 
     def test_quoted_string_values(self, config_dir):
         tmp_path, mgr = config_dir
