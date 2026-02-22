@@ -58,25 +58,16 @@ AUDIO_CHANNELS = 1
 SILENCE_RMS_THRESHOLD = 200
 
 APT_PACKAGES: dict[str, str] = {
-    "ffmpeg": "ffmpeg",
     "xclip": "xclip",
-    "xdotool": "xdotool",
-}
-
-APT_BUILD_PACKAGES: dict[str, str] = {
-    "cmake": "cmake",
-    "build-essential": "build-essential",
 }
 
 PIP_PACKAGES: dict[str, str] = {
     "pynput": "pynput",
-    "rich": "rich",
 }
 
 # Fallback: pip package → apt package (for PEP 668 systems)
 PIP_APT_FALLBACK: dict[str, str] = {
     "pynput": "python3-pynput",
-    "rich": "python3-rich",
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -534,11 +525,14 @@ class DirectoryManager:
 class Diagnostics:
     """Check external dependencies and offer auto-installation.
 
-    Stage 1 — critical checks (fail fast): Python 3.10+, Linux, PulseAudio,
-    ALSA, X11. If any fail, raise RedictumError.
+    Stage 1 — critical checks (fail fast): Python 3.10+, Linux, ALSA, X11.
+    If any fail, raise RedictumError.
 
     Stage 2 — installable dependencies (auto-fix): apt and pip packages.
     Offer to install missing ones, user confirms with y/n.
+
+    Optional — paplay, ffmpeg, xdotool: if missing, offer to install or
+    disable the corresponding feature in config.
 
     whisper.cpp — offer auto-install if missing (clone, build, model download).
     """
@@ -554,7 +548,6 @@ class Diagnostics:
         _rprint("[bold]Checking dependencies...[/bold]")
         self._check_python()
         self._check_linux()
-        self._check_pulseaudio()
         self._check_alsa()
         self._detect_audio_device()
         self._check_x11()
@@ -581,18 +574,6 @@ class Diagnostics:
             logging.error("Check: Linux — FAIL (detected %s)", sys.platform)
             raise RedictumError(
                 f"Linux is required, detected platform: {sys.platform}."
-            )
-
-    def _check_pulseaudio(self) -> None:
-        if shutil.which("paplay"):
-            _rprint("  [green]\u2713[/green] PulseAudio (paplay)")
-            logging.info("Check: PulseAudio — OK")
-        else:
-            _rprint("  [red]\u2717[/red] PulseAudio (paplay) \u2014 not found")
-            logging.error("Check: PulseAudio — MISSING")
-            raise RedictumError(
-                "PulseAudio (paplay) is required but not found.\n"
-                "Install it manually: sudo apt install pulseaudio-utils"
             )
 
     def _check_alsa(self) -> None:
@@ -629,7 +610,7 @@ class Diagnostics:
         raise RedictumError(
             "No working audio recording device found.\n"
             "Tried: " + ", ".join(candidates) + "\n"
-            "Check: pactl info (PulseAudio), arecord -l (ALSA devices)\n"
+            "Check: arecord -l (ALSA devices), pactl info (PulseAudio)\n"
             "Config: [audio] recording_device in config.ini"
         )
 
@@ -712,12 +693,8 @@ class Diagnostics:
     def _find_missing_apt(self) -> list[str]:
         """Return list of missing apt package names."""
         missing: list[str] = []
-        for name, package in {**APT_PACKAGES, **APT_BUILD_PACKAGES}.items():
-            if name == "build-essential":
-                found = self._check_dpkg(package)
-            else:
-                found = shutil.which(name) is not None
-            if found:
+        for name, package in APT_PACKAGES.items():
+            if shutil.which(name) is not None:
                 _rprint(f"  [green]\u2713[/green] {name}")
             else:
                 _rprint(f"  [red]\u2717[/red] {name}")
@@ -832,6 +809,144 @@ class Diagnostics:
             return result.returncode == 0
         except FileNotFoundError:
             return False
+
+    # -- Optional dependencies -----------------------------------------------
+
+    def run_optional(self, force: bool = False) -> None:
+        """Check optional dependencies and offer to install or disable.
+
+        Args:
+            force: When True, bypass config-guards and check all features
+                   (used by ``./redictum setup``).  On successful install,
+                   re-enable the feature in config.
+        """
+        _rprint("\n[bold]Optional features:[/bold]")
+        self._check_optional_sound(force=force)
+        self._check_optional_normalize(force=force)
+        self._check_optional_paste(force=force)
+
+    def _check_optional_sound(self, force: bool = False) -> None:
+        """Check paplay: if missing, offer install or disable sound signals."""
+        # Config-guard: skip if all sound signals already disabled
+        if not force:
+            notif = self._config.get("notification", {})
+            sound_keys = ("sound_signal_start", "sound_signal_processing",
+                          "sound_signal_done", "sound_signal_error")
+            if not any(notif.get(k, True) for k in sound_keys):
+                _rprint("  [dim]-[/dim] Sound notifications (disabled"
+                        " \u2014 run './redictum setup' to reconfigure)")
+                logging.info("Optional: sound signals — skipped (disabled in config)")
+                return
+        if shutil.which("paplay"):
+            _rprint("  [green]\u2713[/green] Sound notifications (paplay)")
+            logging.info("Optional: paplay — found")
+            if force:
+                # Re-enable defaults when tool is present
+                updates = {
+                    "sound_signal_start": "true",
+                    "sound_signal_done": "true",
+                    "sound_signal_error": "true",
+                }
+                self._config_mgr.update(updates)
+                for key in ("sound_signal_start", "sound_signal_done",
+                             "sound_signal_error"):
+                    self._config.setdefault("notification", {})[key] = True
+            return
+        _rprint("  [yellow]\u26a0[/yellow] paplay not found — sound notifications unavailable")
+        logging.info("Optional: paplay — missing")
+        if _confirm("Install pulseaudio-utils (paplay) for sound notifications?", default=True):
+            if self._has_apt() and self._install_apt(["pulseaudio-utils"]):
+                _rprint("  [green]\u2713[/green] paplay installed")
+                logging.info("Optional: paplay — installed")
+                if force:
+                    updates = {
+                        "sound_signal_start": "true",
+                        "sound_signal_done": "true",
+                        "sound_signal_error": "true",
+                    }
+                    self._config_mgr.update(updates)
+                    for key in ("sound_signal_start", "sound_signal_done",
+                                 "sound_signal_error"):
+                        self._config.setdefault("notification", {})[key] = True
+                return
+            _rprint("  [yellow]Installation failed.[/yellow]")
+        # Disable all sound signals in config
+        updates = {
+            "sound_signal_start": "false",
+            "sound_signal_processing": "false",
+            "sound_signal_done": "false",
+            "sound_signal_error": "false",
+        }
+        self._config_mgr.update(updates)
+        for key in ("sound_signal_start", "sound_signal_processing",
+                     "sound_signal_done", "sound_signal_error"):
+            self._config.setdefault("notification", {})[key] = False
+        _rprint("  [dim]Sound notifications disabled in config[/dim]")
+        logging.info("Optional: sound signals disabled in config")
+
+    def _check_optional_normalize(self, force: bool = False) -> None:
+        """Check ffmpeg: if missing, offer install or disable normalization."""
+        # Config-guard: skip if normalization already disabled
+        if not force:
+            if not self._config.get("audio", {}).get("recording_normalize", True):
+                _rprint("  [dim]-[/dim] Audio normalization (disabled"
+                        " \u2014 run './redictum setup' to reconfigure)")
+                logging.info("Optional: ffmpeg — skipped (disabled in config)")
+                return
+        if shutil.which("ffmpeg"):
+            _rprint("  [green]\u2713[/green] Audio normalization (ffmpeg)")
+            logging.info("Optional: ffmpeg — found")
+            if force:
+                self._config_mgr.update({"recording_normalize": "true"})
+                self._config.setdefault("audio", {})["recording_normalize"] = True
+            return
+        _rprint("  [yellow]\u26a0[/yellow] ffmpeg not found — audio normalization unavailable")
+        logging.info("Optional: ffmpeg — missing")
+        if _confirm("Install ffmpeg for audio normalization?", default=True):
+            if self._has_apt() and self._install_apt(["ffmpeg"]):
+                _rprint("  [green]\u2713[/green] ffmpeg installed")
+                logging.info("Optional: ffmpeg — installed")
+                if force:
+                    self._config_mgr.update({"recording_normalize": "true"})
+                    self._config.setdefault("audio", {})["recording_normalize"] = True
+                return
+            _rprint("  [yellow]Installation failed.[/yellow]")
+        self._config_mgr.update({"recording_normalize": "false"})
+        self._config.setdefault("audio", {})["recording_normalize"] = False
+        _rprint("  [dim]Audio normalization disabled in config[/dim]")
+        logging.info("Optional: recording_normalize disabled in config")
+
+    def _check_optional_paste(self, force: bool = False) -> None:
+        """Check xdotool: if missing, offer install or disable auto-paste."""
+        # Config-guard: skip if auto-paste already disabled
+        if not force:
+            if not self._config.get("clipboard", {}).get("paste_auto", True):
+                _rprint("  [dim]-[/dim] Auto-paste (disabled"
+                        " \u2014 run './redictum setup' to reconfigure)")
+                logging.info("Optional: xdotool — skipped (disabled in config)")
+                return
+        if shutil.which("xdotool"):
+            _rprint("  [green]\u2713[/green] Auto-paste (xdotool)")
+            logging.info("Optional: xdotool — found")
+            if force:
+                self._config_mgr.update({"paste_auto": "true"})
+                self._config.setdefault("clipboard", {})["paste_auto"] = True
+            return
+        _rprint("  [yellow]\u26a0[/yellow] xdotool not found — auto-paste unavailable")
+        logging.info("Optional: xdotool — missing")
+        if _confirm("Install xdotool for auto-paste?", default=True):
+            if self._has_apt() and self._install_apt(["xdotool"]):
+                _rprint("  [green]\u2713[/green] xdotool installed")
+                logging.info("Optional: xdotool — installed")
+                if force:
+                    self._config_mgr.update({"paste_auto": "true"})
+                    self._config.setdefault("clipboard", {})["paste_auto"] = True
+                return
+            _rprint("  [yellow]Installation failed.[/yellow]")
+        self._config_mgr.update({"paste_auto": "false"})
+        self._config.setdefault("clipboard", {})["paste_auto"] = False
+        _rprint("  [dim]Auto-paste disabled in config[/dim]")
+        logging.info("Optional: paste_auto disabled in config")
 
     # -- whisper.cpp: warning only ------------------------------------------
 
@@ -1175,8 +1290,42 @@ class WhisperInstaller:
         finally:
             tarball.unlink(missing_ok=True)
 
+    def _ensure_build_tools(self) -> None:
+        """Check cmake and build-essential; offer to install if missing."""
+        missing: list[str] = []
+        if not shutil.which("cmake"):
+            missing.append("cmake")
+        try:
+            result = subprocess.run(
+                ["dpkg", "-s", "build-essential"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if result.returncode != 0:
+                missing.append("build-essential")
+        except FileNotFoundError:
+            missing.append("build-essential")
+        if not missing:
+            return
+        _rprint(f"  [yellow]\u26a0[/yellow] Build tools missing: {', '.join(missing)}")
+        logging.info("Build tools missing: %s", missing)
+        if not _confirm("Install build tools (cmake, build-essential)?", default=True):
+            raise RedictumError(
+                "Build tools required for whisper.cpp compilation.\n"
+                f"Install manually: sudo apt install {' '.join(missing)}"
+            )
+        cmd = ["sudo", "apt", "install", "-y", *missing]
+        _rprint(f"[dim]Running: {' '.join(cmd)}[/dim]")
+        logging.info("Running: %s", " ".join(cmd))
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            raise RedictumError("Failed to install build tools")
+        _rprint("  [green]\u2713[/green] Build tools installed")
+        logging.info("Build tools installed")
+
     def _build(self, use_cuda: bool) -> None:
         """Configure and build whisper.cpp."""
+        self._ensure_build_tools()
         logging.info("Whisper: build started (CUDA=%s)", use_cuda)
         # Clean previous build
         build_dir = self._install_dir / "build"
@@ -1728,11 +1877,15 @@ class AudioProcessor:
             input_path: Path to the raw audio file.
 
         Returns:
-            Path to the normalized audio file.
+            Path to the normalized audio file, or *input_path* if ffmpeg
+            is not installed.
 
         Raises:
             RedictumError: If ffmpeg fails.
         """
+        if not shutil.which("ffmpeg"):
+            logging.warning("ffmpeg not found, skipping normalization")
+            return input_path
         output_path = input_path.with_stem(input_path.stem + "_norm")
         try:
             result = subprocess.run(
@@ -2576,6 +2729,10 @@ class RedictumApp:
                 + "".join(f"  \u2022 {m}\n" for m in missing_core)
                 + "Run again to install them."
             )
+        diag.run_optional()
+        # Reload config — run_optional() may have updated settings on disk
+        config = self._load_config()
+        diag = Diagnostics(config, self._config_mgr)
         diag.check_whisper()
         # Reload config — check_whisper() may have updated paths on disk
         config = self._load_config()
@@ -2628,8 +2785,6 @@ class RedictumApp:
             return False
         if sys.platform != "linux":
             return False
-        if not shutil.which("paplay"):
-            return False
         if not shutil.which("arecord"):
             return False
         if not os.environ.get("DISPLAY"):
@@ -2640,6 +2795,19 @@ class RedictumApp:
             return False
         # Stage 2 + whisper
         return not self._collect_missing_deps(config)
+
+    def _check_optional_mismatch(self, config: dict[str, Any]) -> bool:
+        """Return True if any optional feature is enabled but its tool is missing."""
+        notif = config.get("notification", {})
+        sound_keys = ("sound_signal_start", "sound_signal_processing",
+                      "sound_signal_done", "sound_signal_error")
+        if any(notif.get(k, True) for k in sound_keys) and not shutil.which("paplay"):
+            return True
+        if config.get("audio", {}).get("recording_normalize", True) and not shutil.which("ffmpeg"):
+            return True
+        if config.get("clipboard", {}).get("paste_auto", True) and not shutil.which("xdotool"):
+            return True
+        return False
 
     def _print_banner(self, ready: bool = False) -> None:
         """Print compact startup banner with hotkeys and language info."""
@@ -2691,6 +2859,11 @@ class RedictumApp:
         if not first_run:
             self._config = self.init_quick()
             if self._deps_ok(self._config):
+                # Detect optional deps that disappeared after setup
+                if self._check_optional_mismatch(self._config):
+                    diag = Diagnostics(self._config, self._config_mgr)
+                    diag.run_optional()
+                    self._config = self._load_config()
                 ready = False
             else:
                 self._config = self.init()
@@ -2730,7 +2903,13 @@ class RedictumApp:
         first_run = not self._is_initialized()
         if not first_run:
             self._config = self.init_quick()
-            if not self._deps_ok(self._config):
+            if self._deps_ok(self._config):
+                # Detect optional deps that disappeared after setup
+                if self._check_optional_mismatch(self._config):
+                    diag = Diagnostics(self._config, self._config_mgr)
+                    diag.run_optional()
+                    self._config = self._load_config()
+            else:
                 self._config = self.init()
         else:
             self._config = self.init()
@@ -2771,6 +2950,21 @@ class RedictumApp:
             _rprint(f"[green]Daemon is running[/green] (PID {pid})")
         else:
             _rprint("[yellow]Daemon is not running.[/yellow]")
+        return EXIT_OK
+
+    def run_setup(self) -> int:
+        """Re-run optional dependency setup (force-check all features).
+
+        Returns:
+            Exit code.
+        """
+        self._config = self._load_config()
+        self._dir_mgr.ensure()
+        _rprint("[bold]Redictum \u2014 Dependency Setup[/bold]")
+        diag = Diagnostics(self._config, self._config_mgr)
+        diag.run_optional(force=True)
+        self._config = self._load_config()
+        _rprint("\n[green]Setup complete.[/green]")
         return EXIT_OK
 
     def run_whisper(self) -> int:
@@ -3160,6 +3354,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start", help="Start the daemon")
     sub.add_parser("stop", help="Stop the daemon")
     sub.add_parser("status", help="Show daemon status")
+    sub.add_parser("setup", help="Re-run optional dependency setup")
     sub.add_parser("whisper", help="Setup whisper.cpp (install, check, reconfigure)")
     sub.add_parser("language", help="Change transcription language")
 
@@ -3195,6 +3390,8 @@ def main() -> int:
             return app.run_stop()
         if args.command == "status":
             return app.run_status()
+        if args.command == "setup":
+            return app.run_setup()
         if args.command == "whisper":
             return app.run_whisper()
         if args.command == "language":

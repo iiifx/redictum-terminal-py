@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `./redictum setup` subcommand to re-run optional dependency setup (force-check all features, re-enable on install)
+- Startup detection of missing optional tools: warns and offers to install/disable when a dependency disappears after setup
+
+### Changed
+- Make paplay, ffmpeg, xdotool optional with interactive prompts; choice persisted in config
+- Remove `rich` from mandatory pip dependencies (plain-text fallback already exists)
+- Defer cmake/build-essential install to whisper.cpp build step
+
+### Added
 - Language selector wizard: `./redictum language` to change transcription language
 - First-run language prompt: offer to change auto-detected language on first start
 - Comprehensive diagnostics logging: dependency checks, package installation, and user prompt responses are now written to the log file

@@ -40,13 +40,6 @@ class TestDepsOk:
         # shutil.which returns a path for all known tools
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
 
-        # dpkg check for build-essential
-        from unittest.mock import MagicMock
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda cmd, **kw: MagicMock(returncode=0),
-        )
-
         # whisper cli and model exist
         cli = tmp_path / "whisper-cli"
         model = tmp_path / "model.bin"
@@ -78,11 +71,6 @@ class TestDepsOk:
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.setenv("DISPLAY", ":0")
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
-        from unittest.mock import MagicMock
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda cmd, **kw: MagicMock(returncode=0),
-        )
         config = {
             "dependency": {
                 "whisper_cli": "/nonexistent/path",
@@ -110,15 +98,15 @@ class TestCollectMissingDeps:
         assert app._collect_missing_deps(config) == []
 
     def test_missing_apt(self, app, monkeypatch):
-        present = {"xclip"}
-        monkeypatch.setattr(
-            "shutil.which",
-            lambda x: f"/usr/bin/{x}" if x in present else None,
-        )
+        monkeypatch.setattr("shutil.which", lambda x: None)
         config = {"dependency": {"whisper_cli": "", "whisper_model": ""}}
         missing = app._collect_missing_deps(config)
-        assert "ffmpeg" in missing
-        assert "xdotool" in missing
+        assert "xclip" in missing
+
+    def test_xclip_present_not_in_missing(self, app, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        config = {"dependency": {"whisper_cli": "", "whisper_model": ""}}
+        missing = app._collect_missing_deps(config)
         assert "xclip" not in missing
 
     def test_missing_whisper(self, app, monkeypatch):
@@ -153,8 +141,8 @@ class TestInitAbort:
         monkeypatch.setattr(sys, "version_info", _VersionInfo(3, 12, 0, "final", 0))
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.setenv("DISPLAY", ":0")
-        # Stage 1 tools present, but ffmpeg missing (runtime dep)
-        stage1_tools = {"paplay", "arecord", "xclip", "xdotool", "apt"}
+        # Stage 1 tools present, but xclip missing (critical dep)
+        stage1_tools = {"arecord", "apt"}
         monkeypatch.setattr(
             "shutil.which",
             lambda x: f"/usr/bin/{x}" if x in stage1_tools else None,
@@ -181,7 +169,8 @@ class TestInitAbort:
         monkeypatch.setattr(sys, "version_info", _VersionInfo(3, 12, 0, "final", 0))
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.setenv("DISPLAY", ":0")
-        stage1_tools = {"paplay", "arecord", "xclip", "xdotool", "apt"}
+        # xclip missing → critical dep failure before whisper check
+        stage1_tools = {"arecord", "apt"}
         monkeypatch.setattr(
             "shutil.which",
             lambda x: f"/usr/bin/{x}" if x in stage1_tools else None,
@@ -327,3 +316,83 @@ class TestApplyOverrides:
         config = {"clipboard": {"paste_restore_delay": 0.3}}
         with pytest.raises(RedictumError, match="Invalid value"):
             _apply_overrides(config, ["clipboard.paste_restore_delay=slow"])
+
+
+class TestCheckOptionalMismatch:
+    """RedictumApp._check_optional_mismatch: detect enabled features with missing tools."""
+
+    def test_all_tools_present(self, app, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        config = {
+            "notification": {
+                "sound_signal_start": True,
+                "sound_signal_done": True,
+                "sound_signal_error": True,
+            },
+            "audio": {"recording_normalize": True},
+            "clipboard": {"paste_auto": True},
+        }
+        assert app._check_optional_mismatch(config) is False
+
+    def test_paplay_missing_sound_enabled(self, app, monkeypatch):
+        present = {"ffmpeg", "xdotool"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in present else None,
+        )
+        config = {
+            "notification": {"sound_signal_start": True},
+            "audio": {"recording_normalize": True},
+            "clipboard": {"paste_auto": True},
+        }
+        assert app._check_optional_mismatch(config) is True
+
+    def test_ffmpeg_missing_normalize_enabled(self, app, monkeypatch):
+        present = {"paplay", "xdotool"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in present else None,
+        )
+        config = {
+            "notification": {
+                "sound_signal_start": False,
+                "sound_signal_processing": False,
+                "sound_signal_done": False,
+                "sound_signal_error": False,
+            },
+            "audio": {"recording_normalize": True},
+            "clipboard": {"paste_auto": True},
+        }
+        assert app._check_optional_mismatch(config) is True
+
+    def test_xdotool_missing_paste_enabled(self, app, monkeypatch):
+        present = {"paplay", "ffmpeg"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in present else None,
+        )
+        config = {
+            "notification": {
+                "sound_signal_start": False,
+                "sound_signal_processing": False,
+                "sound_signal_done": False,
+                "sound_signal_error": False,
+            },
+            "audio": {"recording_normalize": False},
+            "clipboard": {"paste_auto": True},
+        }
+        assert app._check_optional_mismatch(config) is True
+
+    def test_all_disabled_all_missing(self, app, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda x: None)
+        config = {
+            "notification": {
+                "sound_signal_start": False,
+                "sound_signal_processing": False,
+                "sound_signal_done": False,
+                "sound_signal_error": False,
+            },
+            "audio": {"recording_normalize": False},
+            "clipboard": {"paste_auto": False},
+        }
+        assert app._check_optional_mismatch(config) is False

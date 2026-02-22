@@ -4,7 +4,6 @@ from __future__ import annotations
 import sys
 from collections import namedtuple
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -60,23 +59,6 @@ class TestCheckLinux:
             diag._check_linux()
 
 
-class TestCheckPulseaudio:
-    """Diagnostics._check_pulseaudio."""
-
-    def test_found(self, make_diagnostics, monkeypatch):
-        diag = make_diagnostics()
-        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/paplay" if x == "paplay" else None)
-        diag._check_pulseaudio()
-
-    def test_not_found(self, make_diagnostics, monkeypatch):
-        from redictum import RedictumError
-
-        diag = make_diagnostics()
-        monkeypatch.setattr("shutil.which", lambda x: None)
-        with pytest.raises(RedictumError, match="PulseAudio"):
-            diag._check_pulseaudio()
-
-
 class TestCheckAlsa:
     """Diagnostics._check_alsa."""
 
@@ -117,29 +99,15 @@ class TestFindMissingApt:
     def test_all_present(self, make_diagnostics, monkeypatch):
         diag = make_diagnostics()
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
-        # build-essential check via dpkg
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda cmd, **kw: MagicMock(returncode=0),
-        )
         missing = diag._find_missing_apt()
         assert missing == []
 
     def test_some_missing(self, make_diagnostics, monkeypatch):
         diag = make_diagnostics()
-        present = {"git", "cmake"}
-        monkeypatch.setattr(
-            "shutil.which",
-            lambda x: f"/usr/bin/{x}" if x in present else None,
-        )
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda cmd, **kw: MagicMock(returncode=1),
-        )
+        monkeypatch.setattr("shutil.which", lambda x: None)
         missing = diag._find_missing_apt()
         assert len(missing) > 0
-        assert "git" not in missing
-        assert "cmake" not in missing
+        assert "xclip" in missing
 
 
 class TestFindMissingPip:
@@ -211,3 +179,89 @@ class TestCheckWhisper:
         diag = make_diagnostics()
         monkeypatch.setattr("builtins.input", lambda _: "n")
         diag.check_whisper()  # should ask but user says no
+
+
+class TestRunOptionalConfigAware:
+    """run_optional(force=False) skips features disabled in config."""
+
+    def test_all_disabled_no_prompts(self, make_diagnostics, monkeypatch):
+        """When all optional features are disabled, zero prompts are shown."""
+        config = {
+            "dependency": {"whisper_cli": "", "whisper_model": ""},
+            "notification": {
+                "sound_signal_start": False,
+                "sound_signal_processing": False,
+                "sound_signal_done": False,
+                "sound_signal_error": False,
+            },
+            "audio": {"recording_normalize": False},
+            "clipboard": {"paste_auto": False},
+        }
+        diag = make_diagnostics(config)
+        # All tools missing — but config says disabled, so no prompts
+        monkeypatch.setattr("shutil.which", lambda x: None)
+        # If a prompt fires, input() will raise to fail the test
+        monkeypatch.setattr("builtins.input", lambda _: (_ for _ in ()).throw(
+            AssertionError("unexpected prompt"),
+        ))
+        diag.run_optional()  # should not raise
+
+    def test_sound_disabled_skips_paplay(self, make_diagnostics, monkeypatch):
+        """When all sound signals are disabled, paplay check is skipped."""
+        config = {
+            "dependency": {"whisper_cli": "", "whisper_model": ""},
+            "notification": {
+                "sound_signal_start": False,
+                "sound_signal_processing": False,
+                "sound_signal_done": False,
+                "sound_signal_error": False,
+            },
+            "audio": {"recording_normalize": True},
+            "clipboard": {"paste_auto": True},
+        }
+        diag = make_diagnostics(config)
+        # paplay missing, ffmpeg/xdotool present
+        present = {"ffmpeg", "xdotool"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in present else None,
+        )
+        diag.run_optional()  # paplay skipped, others pass
+
+    def test_normalize_disabled_skips_ffmpeg(self, make_diagnostics, monkeypatch):
+        """When recording_normalize is False, ffmpeg check is skipped."""
+        config = {
+            "dependency": {"whisper_cli": "", "whisper_model": ""},
+            "notification": {
+                "sound_signal_start": True,
+            },
+            "audio": {"recording_normalize": False},
+            "clipboard": {"paste_auto": True},
+        }
+        diag = make_diagnostics(config)
+        # ffmpeg missing, paplay/xdotool present
+        present = {"paplay", "xdotool"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in present else None,
+        )
+        diag.run_optional()  # ffmpeg skipped, others pass
+
+    def test_paste_disabled_skips_xdotool(self, make_diagnostics, monkeypatch):
+        """When paste_auto is False, xdotool check is skipped."""
+        config = {
+            "dependency": {"whisper_cli": "", "whisper_model": ""},
+            "notification": {
+                "sound_signal_start": True,
+            },
+            "audio": {"recording_normalize": True},
+            "clipboard": {"paste_auto": False},
+        }
+        diag = make_diagnostics(config)
+        # xdotool missing, paplay/ffmpeg present
+        present = {"paplay", "ffmpeg"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in present else None,
+        )
+        diag.run_optional()  # xdotool skipped, others pass

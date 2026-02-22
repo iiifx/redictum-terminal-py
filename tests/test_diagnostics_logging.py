@@ -245,13 +245,6 @@ class TestDiagnosticsCheckLogging:
             diag._check_linux()
         assert any("Linux" in r.message and "OK" in r.message for r in caplog.records)
 
-    def test_check_pulseaudio_logs_ok(self, make_diagnostics, monkeypatch, caplog):
-        diag = make_diagnostics()
-        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/paplay" if x == "paplay" else None)
-        with caplog.at_level(logging.INFO):
-            diag._check_pulseaudio()
-        assert any("PulseAudio" in r.message and "OK" in r.message for r in caplog.records)
-
     def test_check_alsa_logs_ok(self, make_diagnostics, monkeypatch, caplog):
         diag = make_diagnostics()
         monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/arecord" if x == "arecord" else None)
@@ -293,10 +286,6 @@ class TestDiagnosticsPackageLogging:
     def test_find_missing_apt_all_present(self, make_diagnostics, monkeypatch, caplog):
         diag = make_diagnostics()
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda cmd, **kw: MagicMock(returncode=0),
-        )
         with caplog.at_level(logging.INFO):
             missing = diag._find_missing_apt()
         assert missing == []
@@ -304,15 +293,7 @@ class TestDiagnosticsPackageLogging:
 
     def test_find_missing_apt_some_missing(self, make_diagnostics, monkeypatch, caplog):
         diag = make_diagnostics()
-        present = {"git", "cmake"}
-        monkeypatch.setattr(
-            "shutil.which",
-            lambda x: f"/usr/bin/{x}" if x in present else None,
-        )
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda cmd, **kw: MagicMock(returncode=1),
-        )
+        monkeypatch.setattr("shutil.which", lambda x: None)
         with caplog.at_level(logging.INFO):
             missing = diag._find_missing_apt()
         assert len(missing) > 0
@@ -352,3 +333,217 @@ class TestWhisperCheckLogging:
         with caplog.at_level(logging.INFO):
             diag.check_whisper()
         assert any("Whisper CLI" in r.message and "missing" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# run_optional() checks
+# ---------------------------------------------------------------------------
+
+class TestRunOptional:
+    """Diagnostics.run_optional: optional dependency checks."""
+
+    def test_all_present(self, make_diagnostics, monkeypatch, caplog):
+        """When all optional tools are installed, no prompts and all logged as found."""
+        diag = make_diagnostics()
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        with caplog.at_level(logging.INFO):
+            diag.run_optional()
+        assert any("paplay" in r.message and "found" in r.message for r in caplog.records)
+        assert any("ffmpeg" in r.message and "found" in r.message for r in caplog.records)
+        assert any("xdotool" in r.message and "found" in r.message for r in caplog.records)
+
+    def test_sound_declined_disables_config(self, make_diagnostics, monkeypatch, tmp_path, caplog):
+        """Declining paplay install disables all sound_signal_* in config."""
+        config = {
+            "dependency": {"whisper_cli": "", "whisper_model": ""},
+            "notification": {
+                "sound_signal_start": True,
+                "sound_signal_processing": False,
+                "sound_signal_done": True,
+                "sound_signal_error": True,
+            },
+        }
+        diag = make_diagnostics(config)
+        present = {"ffmpeg", "xdotool"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in present else None,
+        )
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+        with caplog.at_level(logging.INFO):
+            diag._check_optional_sound()
+        assert config["notification"]["sound_signal_start"] is False
+        assert config["notification"]["sound_signal_done"] is False
+        assert config["notification"]["sound_signal_error"] is False
+        assert any("disabled" in r.message for r in caplog.records)
+
+    def test_normalize_declined_disables_config(self, make_diagnostics, monkeypatch, tmp_path, caplog):
+        """Declining ffmpeg install disables recording_normalize in config."""
+        config = {
+            "dependency": {"whisper_cli": "", "whisper_model": ""},
+            "audio": {"recording_normalize": True},
+        }
+        diag = make_diagnostics(config)
+        present = {"paplay", "xdotool"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in present else None,
+        )
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+        with caplog.at_level(logging.INFO):
+            diag._check_optional_normalize()
+        assert config["audio"]["recording_normalize"] is False
+        assert any("disabled" in r.message for r in caplog.records)
+
+    def test_paste_declined_disables_config(self, make_diagnostics, monkeypatch, tmp_path, caplog):
+        """Declining xdotool install disables paste_auto in config."""
+        config = {
+            "dependency": {"whisper_cli": "", "whisper_model": ""},
+            "clipboard": {"paste_auto": True},
+        }
+        diag = make_diagnostics(config)
+        present = {"paplay", "ffmpeg"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in present else None,
+        )
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+        with caplog.at_level(logging.INFO):
+            diag._check_optional_paste()
+        assert config["clipboard"]["paste_auto"] is False
+        assert any("disabled" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# AudioProcessor.normalize() ffmpeg fallback
+# ---------------------------------------------------------------------------
+
+class TestNormalizeFfmpegFallback:
+    """AudioProcessor.normalize returns input_path when ffmpeg is missing."""
+
+    def test_no_ffmpeg_returns_input(self, monkeypatch, tmp_path, caplog):
+        from redictum import AudioProcessor
+
+        monkeypatch.setattr("shutil.which", lambda x: None)
+        audio = tmp_path / "test.wav"
+        audio.write_bytes(b"\x00" * 100)
+        proc = AudioProcessor()
+        with caplog.at_level(logging.WARNING):
+            result = proc.normalize(audio)
+        assert result == audio
+        assert any("ffmpeg not found" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# WhisperInstaller._ensure_build_tools()
+# ---------------------------------------------------------------------------
+
+class TestRunOptionalForceReEnable:
+    """force=True re-enables features when tool is found."""
+
+    def test_force_reenables_sound(self, make_diagnostics, monkeypatch, caplog):
+        """force=True + paplay found → re-enables sound_signal_* in config."""
+        config = {
+            "dependency": {"whisper_cli": "", "whisper_model": ""},
+            "notification": {
+                "sound_signal_start": False,
+                "sound_signal_processing": False,
+                "sound_signal_done": False,
+                "sound_signal_error": False,
+            },
+        }
+        diag = make_diagnostics(config)
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        with caplog.at_level(logging.INFO):
+            diag._check_optional_sound(force=True)
+        assert config["notification"]["sound_signal_start"] is True
+        assert config["notification"]["sound_signal_done"] is True
+        assert config["notification"]["sound_signal_error"] is True
+
+    def test_force_reenables_normalize(self, make_diagnostics, monkeypatch, caplog):
+        """force=True + ffmpeg found → re-enables recording_normalize."""
+        config = {
+            "dependency": {"whisper_cli": "", "whisper_model": ""},
+            "audio": {"recording_normalize": False},
+        }
+        diag = make_diagnostics(config)
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        with caplog.at_level(logging.INFO):
+            diag._check_optional_normalize(force=True)
+        assert config["audio"]["recording_normalize"] is True
+
+    def test_force_reenables_paste(self, make_diagnostics, monkeypatch, caplog):
+        """force=True + xdotool found → re-enables paste_auto."""
+        config = {
+            "dependency": {"whisper_cli": "", "whisper_model": ""},
+            "clipboard": {"paste_auto": False},
+        }
+        diag = make_diagnostics(config)
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        with caplog.at_level(logging.INFO):
+            diag._check_optional_paste(force=True)
+        assert config["clipboard"]["paste_auto"] is True
+
+    def test_force_decline_stays_disabled(self, make_diagnostics, monkeypatch, caplog):
+        """force=True + tool missing + decline → feature stays disabled."""
+        config = {
+            "dependency": {"whisper_cli": "", "whisper_model": ""},
+            "audio": {"recording_normalize": False},
+        }
+        diag = make_diagnostics(config)
+        monkeypatch.setattr("shutil.which", lambda x: None)
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+        with caplog.at_level(logging.INFO):
+            diag._check_optional_normalize(force=True)
+        assert config["audio"]["recording_normalize"] is False
+
+
+class TestSetupSubcommand:
+    """./redictum setup: runs run_optional(force=True)."""
+
+    def test_setup_calls_force(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+        from redictum import RedictumApp, EXIT_OK
+
+        app = RedictumApp(tmp_path)
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        # Write minimal config
+        (tmp_path / "config.ini").write_text(
+            "[dependency]\nwhisper_cli = x\nwhisper_model = x\n"
+        )
+
+        with patch("redictum.Diagnostics.run_optional") as mock_opt:
+            result = app.run_setup()
+
+        assert result == EXIT_OK
+        mock_opt.assert_called_once_with(force=True)
+
+
+class TestEnsureBuildTools:
+    """WhisperInstaller._ensure_build_tools: checks cmake/build-essential."""
+
+    def test_all_present_no_prompt(self, tmp_path, monkeypatch):
+        from redictum import WhisperInstaller, ConfigManager
+
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda cmd, **kw: MagicMock(returncode=0),
+        )
+        mgr = ConfigManager(tmp_path)
+        installer = WhisperInstaller(mgr)
+        installer._ensure_build_tools()  # should not raise
+
+    def test_missing_declined_raises(self, tmp_path, monkeypatch):
+        from redictum import WhisperInstaller, ConfigManager, RedictumError
+
+        monkeypatch.setattr("shutil.which", lambda x: None)
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda cmd, **kw: MagicMock(returncode=1),
+        )
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+        mgr = ConfigManager(tmp_path)
+        installer = WhisperInstaller(mgr)
+        with pytest.raises(RedictumError, match="Build tools"):
+            installer._ensure_build_tools()
