@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - System information logged at startup: OS, kernel, Python, GPU, CUDA, RAM, locale
 
 ### Fixed
+- Abort setup when user declines critical dependencies instead of entering broken main loop
 - Fix race condition: read `_current_mode` under `state_lock` in `on_release()`
 - Validate whisper CLI and model paths on startup with clear error messages
 - Increase clipboard restore delay from 200ms to 300ms; add configurable `paste_restore_delay`

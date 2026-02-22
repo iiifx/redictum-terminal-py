@@ -92,6 +92,145 @@ class TestDepsOk:
         assert app._deps_ok(config) is False
 
 
+class TestCollectMissingDeps:
+    """RedictumApp._collect_missing_deps: list missing runtime deps."""
+
+    def test_all_present(self, app, tmp_path, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        cli = tmp_path / "whisper-cli"
+        model = tmp_path / "model.bin"
+        cli.write_text("x")
+        model.write_text("x")
+        config = {
+            "dependency": {
+                "whisper_cli": str(cli),
+                "whisper_model": str(model),
+            },
+        }
+        assert app._collect_missing_deps(config) == []
+
+    def test_missing_apt(self, app, monkeypatch):
+        present = {"xclip"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in present else None,
+        )
+        config = {"dependency": {"whisper_cli": "", "whisper_model": ""}}
+        missing = app._collect_missing_deps(config)
+        assert "ffmpeg" in missing
+        assert "xdotool" in missing
+        assert "xclip" not in missing
+
+    def test_missing_whisper(self, app, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        config = {
+            "dependency": {
+                "whisper_cli": "/nonexistent/cli",
+                "whisper_model": "/nonexistent/model",
+            },
+        }
+        missing = app._collect_missing_deps(config)
+        assert "whisper.cpp" in missing
+        assert "whisper model" in missing
+
+    def test_empty_whisper_paths(self, app, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        config = {"dependency": {"whisper_cli": "", "whisper_model": ""}}
+        missing = app._collect_missing_deps(config)
+        assert "whisper.cpp" in missing
+        assert "whisper model" in missing
+
+
+class TestInitAbort:
+    """init() aborts when user declines critical deps."""
+
+    def test_init_raises_when_deps_missing(self, app, monkeypatch, tmp_path):
+        """init() raises RedictumError when runtime deps are not satisfied."""
+        import sys
+        from unittest.mock import MagicMock
+        from redictum import RedictumError
+
+        monkeypatch.setattr(sys, "version_info", _VersionInfo(3, 12, 0, "final", 0))
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("DISPLAY", ":0")
+        # Stage 1 tools present, but ffmpeg missing (runtime dep)
+        stage1_tools = {"paplay", "arecord", "xclip", "xdotool", "apt"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in stage1_tools else None,
+        )
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda cmd, **kw: MagicMock(returncode=0),
+        )
+        # User declines install
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+
+        with pytest.raises(RedictumError, match="Setup incomplete"):
+            app.init()
+
+        # .initialized should NOT exist
+        assert not (tmp_path / ".initialized").exists()
+
+    def test_init_aborts_before_whisper_when_core_missing(self, app, monkeypatch, tmp_path):
+        """init() aborts after stage2 without asking about whisper."""
+        import sys
+        from unittest.mock import MagicMock, call, patch
+        from redictum import RedictumError
+
+        monkeypatch.setattr(sys, "version_info", _VersionInfo(3, 12, 0, "final", 0))
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("DISPLAY", ":0")
+        stage1_tools = {"paplay", "arecord", "xclip", "xdotool", "apt"}
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: f"/usr/bin/{x}" if x in stage1_tools else None,
+        )
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda cmd, **kw: MagicMock(returncode=0),
+        )
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+
+        # Spy on check_whisper to verify it's never called
+        from redictum import Diagnostics
+        with patch.object(Diagnostics, "check_whisper") as mock_whisper:
+            with pytest.raises(RedictumError, match="Setup incomplete"):
+                app.init()
+            mock_whisper.assert_not_called()
+
+    def test_init_marks_initialized_when_deps_ok(self, app, monkeypatch, tmp_path):
+        """init() writes .initialized when all deps are satisfied."""
+        import sys
+        from unittest.mock import MagicMock
+
+        monkeypatch.setattr(sys, "version_info", _VersionInfo(3, 12, 0, "final", 0))
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda cmd, **kw: MagicMock(returncode=0),
+        )
+
+        # Create whisper files so check_whisper passes
+        cli = tmp_path / "whisper-cli"
+        model = tmp_path / "model.bin"
+        cli.write_text("x")
+        model.write_text("x")
+
+        # Write config with whisper paths
+        config_path = tmp_path / "config.ini"
+        config_path.write_text(
+            "[dependency]\n"
+            f'whisper_cli = "{cli}"\n'
+            f'whisper_model = "{model}"\n'
+        )
+
+        app.init()
+        assert (tmp_path / ".initialized").exists()
+
+
 class TestApplyOverrides:
     """_apply_overrides: --set section.key=value CLI overrides."""
 

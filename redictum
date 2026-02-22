@@ -2559,10 +2559,37 @@ class RedictumApp:
         diag = Diagnostics(config, self._config_mgr)
         diag.run_stage1()
         diag.run_stage2()
+        # Early exit if core APT/pip deps still missing after stage 2
+        missing_core: list[str] = []
+        for name in APT_PACKAGES:
+            if not shutil.which(name):
+                missing_core.append(name)
+        for import_name, pip_name in PIP_PACKAGES.items():
+            try:
+                __import__(import_name)
+            except ImportError:
+                missing_core.append(pip_name)
+        if missing_core:
+            logging.error("Setup incomplete: missing %s", missing_core)
+            raise RedictumError(
+                "Setup incomplete. Missing critical dependencies:\n"
+                + "".join(f"  \u2022 {m}\n" for m in missing_core)
+                + "Run again to install them."
+            )
         diag.check_whisper()
-        self._mark_initialized()
         # Reload config — check_whisper() may have updated paths on disk
-        return self._load_config()
+        config = self._load_config()
+        # Verify all runtime deps are satisfied
+        missing = self._collect_missing_deps(config)
+        if missing:
+            logging.error("Setup incomplete: missing %s", missing)
+            raise RedictumError(
+                "Setup incomplete. Missing dependencies:\n"
+                + "".join(f"  \u2022 {m}\n" for m in missing)
+                + "Run again to install them."
+            )
+        self._mark_initialized()
+        return config
 
     def init_quick(self) -> dict[str, Any]:
         """Load config and ensure directories without running diagnostics.
@@ -2573,6 +2600,26 @@ class RedictumApp:
         config = self._load_config()
         self._dir_mgr.ensure()
         return config
+
+    def _collect_missing_deps(self, config: dict[str, Any]) -> list[str]:
+        """Return names of missing runtime dependencies."""
+        missing: list[str] = []
+        for name in APT_PACKAGES:
+            if not shutil.which(name):
+                missing.append(name)
+        for import_name, pip_name in PIP_PACKAGES.items():
+            try:
+                __import__(import_name)
+            except ImportError:
+                missing.append(pip_name)
+        dep = config.get("dependency", {})
+        cli_path = dep.get("whisper_cli", "")
+        model_path = dep.get("whisper_model", "")
+        if not cli_path or not Path(cli_path).exists():
+            missing.append("whisper.cpp")
+        if not model_path or not Path(model_path).exists():
+            missing.append("whisper model")
+        return missing
 
     def _deps_ok(self, config: dict[str, Any]) -> bool:
         """Silently check that all critical dependencies are present."""
@@ -2591,25 +2638,8 @@ class RedictumApp:
         device = config.get("audio", {}).get("recording_device", "auto")
         if device == "auto":
             return False
-        # Stage 2: apt packages (runtime only, build tools skipped)
-        for name in APT_PACKAGES:
-            if not shutil.which(name):
-                return False
-        # Stage 2: pip packages
-        for import_name in PIP_PACKAGES:
-            try:
-                __import__(import_name)
-            except ImportError:
-                return False
-        # whisper.cpp
-        dep = config.get("dependency", {})
-        cli_path = dep.get("whisper_cli", "")
-        model_path = dep.get("whisper_model", "")
-        if not cli_path or not Path(cli_path).exists():
-            return False
-        if not model_path or not Path(model_path).exists():
-            return False
-        return True
+        # Stage 2 + whisper
+        return not self._collect_missing_deps(config)
 
     def _print_banner(self, ready: bool = False) -> None:
         """Print compact startup banner with hotkeys and language info."""
