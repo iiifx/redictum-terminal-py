@@ -738,8 +738,13 @@ class Diagnostics:
     def _install_apt(self, packages: list[str]) -> bool:
         """Run sudo apt install for the given packages. Return success."""
         # Security: Validate package names to prevent injection
+        # Debian package naming: must start with alphanumeric, contain only [a-z0-9+.-]
         for pkg in packages:
-            if not re.match(r'^[a-z0-9][a-z0-9+.-]*$', pkg):
+            if not pkg or len(pkg) < 2:
+                logging.error("Invalid package name (too short): %s", pkg)
+                _rprint(f"[red]Invalid package name: {pkg}[/red]")
+                return False
+            if not re.match(r'^[a-z0-9][a-z0-9+.-]+$', pkg):
                 logging.error("Invalid package name: %s", pkg)
                 _rprint(f"[red]Invalid package name: {pkg}[/red]")
                 return False

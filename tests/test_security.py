@@ -290,14 +290,11 @@ class TestSensitiveDataLogging:
 class TestCUDAInstaller:
     """Test CUDA installer security."""
 
-    def test_cuda_keyring_url_hardcoded(self):
+    def test_cuda_keyring_url_hardcoded(self, tmp_path):
         """CUDA keyring URL should be hardcoded and not user-configurable."""
         from redictum import WhisperInstaller, ConfigManager
-        from pathlib import Path
 
         # Create a minimal config manager
-        tmp_path = Path("/tmp/test_cuda")
-        tmp_path.mkdir(exist_ok=True)
         config_mgr = ConfigManager(tmp_path)
         
         installer = WhisperInstaller(config_mgr)
