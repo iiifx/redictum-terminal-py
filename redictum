@@ -32,7 +32,7 @@ try:
 except ImportError:
     _console = None
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 EXIT_OK = 0
 EXIT_ERROR = 1

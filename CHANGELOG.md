@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-02-22
+
 ### Fixed
 - Fix `os.umask(0)` in daemon mode: all files were created world-writable (now `0o022`)
 - Fix PID file created without explicit permissions: use atomic `O_EXCL` creation with `0o644`
