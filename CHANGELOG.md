@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Runtime state file (`.state`): replaces `.initialized` marker with persistent JSON state
   (version tracking, build metadata, UI state)
 
+### Fixed
+- E2E tests: place fake whisper-cli and model at default config paths so first-run
+  init passes without interactive prompts
+
+### Changed
+- Rename `docker/` → `e2e/` to reflect the directory's purpose (E2E test infrastructure)
+
 ## [1.2.1] - 2026-02-22
 
 ### Fixed

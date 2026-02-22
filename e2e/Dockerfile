@@ -29,6 +29,12 @@ COPY e2e/fake-arecord /usr/local/bin/arecord
 COPY e2e/fake-whisper-cli /usr/local/bin/whisper-cli
 RUN chmod +x /usr/local/bin/paplay /usr/local/bin/arecord /usr/local/bin/whisper-cli
 
+# Place fake whisper-cli and model at default config paths so check_whisper()
+# passes on first run without interactive prompts (stdin is /dev/null).
+RUN mkdir -p /root/whisper.cpp/build/bin /root/whisper.cpp/models \
+    && ln -s /usr/local/bin/whisper-cli /root/whisper.cpp/build/bin/whisper-cli \
+    && touch /root/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin
+
 COPY redictum ./redictum
 
 COPY e2e/run_e2e.sh ./run_e2e.sh
