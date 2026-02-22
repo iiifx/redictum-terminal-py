@@ -2958,6 +2958,8 @@ class RedictumApp:
         Returns:
             Exit code.
         """
+        setup_logging(self._log_path)
+        logging.info("Subcommand: setup")
         self._config = self._load_config()
         self._dir_mgr.ensure()
         _rprint("[bold]Redictum \u2014 Dependency Setup[/bold]")
@@ -2965,6 +2967,7 @@ class RedictumApp:
         diag.run_optional(force=True)
         self._config = self._load_config()
         _rprint("\n[green]Setup complete.[/green]")
+        logging.info("Setup complete")
         return EXIT_OK
 
     def run_whisper(self) -> int:
@@ -2973,10 +2976,13 @@ class RedictumApp:
         Returns:
             Exit code.
         """
+        setup_logging(self._log_path)
+        logging.info("Subcommand: whisper")
         self._config = self._load_config()
         self._dir_mgr.ensure()
         installer = WhisperInstaller(self._config_mgr)
         installer.install()
+        logging.info("Whisper subcommand complete")
         return EXIT_OK
 
     def run_language(self) -> int:
@@ -2985,6 +2991,8 @@ class RedictumApp:
         Returns:
             Exit code.
         """
+        setup_logging(self._log_path)
+        logging.info("Subcommand: language")
         self._config = self._load_config()
         detected = _show_language_status(self._config)
 
@@ -3017,6 +3025,7 @@ class RedictumApp:
             "whisper_language": lang,
             "whisper_prompt": prompt,
         })
+        logging.info("Language saved: %s", lang)
         _rprint("[green]Language settings saved.[/green]")
         return EXIT_OK
 

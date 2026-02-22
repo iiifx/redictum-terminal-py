@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - `./redictum setup` subcommand to re-run optional dependency setup (force-check all features, re-enable on install)
 - Startup detection of missing optional tools: warns and offers to install/disable when a dependency disappears after setup
+- Logging for subcommands (`setup`, `whisper`, `language`): each now creates its own log file
 
 ### Changed
 - Make paplay, ffmpeg, xdotool optional with interactive prompts; choice persisted in config
