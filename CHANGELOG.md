@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Increase clipboard restore delay from 200ms to 300ms; add configurable `paste_restore_delay`
 - Validate config value types on load: reject invalid int/float with clear error message
 - Add silence detection (RMS energy gate) to prevent whisper hallucinations on silent recordings
+- Refactor `_main_loop` monolith into focused methods: `_on_hold`, `_on_release`, `_run_pipeline`, `_graceful_shutdown`
 
 ## [1.1.0] - 2026-02-21
 

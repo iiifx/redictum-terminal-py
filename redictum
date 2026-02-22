@@ -2473,15 +2473,13 @@ class RedictumApp:
         """Main loop: push-to-talk → record → normalize → transcribe → paste."""
         cfg = self._config
         audio_dir = self._script_dir / "audio"
-        transcripts_dir = self._script_dir / "transcripts"
+        self._transcripts_dir = self._script_dir / "transcripts"
 
         # Unpack config sections (2-level: section → key)
         dep = cfg["dependency"]
-        audio_cfg = cfg["audio"]
-        input_cfg = cfg["input"]
-        clip_cfg = cfg["clipboard"]
-        sound_cfg = cfg["notification"]
-        storage = cfg["storage"]
+        self._audio_cfg = cfg["audio"]
+        self._clip_cfg = cfg["clipboard"]
+        self._sound_cfg = cfg["notification"]
 
         # Resolve language: "auto" -> detect from system locale
         language = dep.get("whisper_language", "auto")
@@ -2490,159 +2488,169 @@ class RedictumApp:
             logging.info("Language auto-detected from locale: %r", language)
 
         # Build pipeline components
-        recorder = AudioRecorder(audio_dir, audio_cfg["recording_device"])
-        processor = AudioProcessor()
-        transcriber = Transcriber(
+        self._recorder = AudioRecorder(audio_dir, self._audio_cfg["recording_device"])
+        self._processor = AudioProcessor()
+        self._transcriber = Transcriber(
             dep["whisper_cli"],
             dep["whisper_model"],
             language,
             prompt=dep.get("whisper_prompt", ""),
             timeout=dep.get("whisper_timeout", 120),
         )
-        clipboard = ClipboardManager()
-        notifier = SoundNotifier(volume=sound_cfg.get("sound_signal_volume", 30))
+        self._clipboard = ClipboardManager()
+        self._notifier = SoundNotifier(volume=self._sound_cfg.get("sound_signal_volume", 30))
         logs_dir = self._log_path.parent
-        housekeeper = Housekeeping(audio_dir, transcripts_dir, logs_dir, storage)
+        self._housekeeper = Housekeeping(
+            audio_dir, self._transcripts_dir, logs_dir, cfg["storage"],
+        )
         listener = HotkeyListener(
-            input_cfg["hotkey_key"], input_cfg["hotkey_hold_delay"],
-            translate_key=input_cfg.get("hotkey_translate_key", ""),
+            cfg["input"]["hotkey_key"], cfg["input"]["hotkey_hold_delay"],
+            translate_key=cfg["input"].get("hotkey_translate_key", ""),
         )
 
-        state = STATE_IDLE
-        state_lock = threading.Lock()
-        _current_mode = "transcribe"
+        # State machine
+        self._state = STATE_IDLE
+        self._state_lock = threading.Lock()
+        self._current_mode = "transcribe"
 
-        def on_hold(mode: str) -> None:
-            nonlocal state, _current_mode
-            with state_lock:
-                if state != STATE_IDLE:
-                    return
-                state = STATE_RECORDING
-                _current_mode = mode
-            try:
-                recorder.start()
-            except Exception:
-                with state_lock:
-                    state = STATE_IDLE
-                logging.exception("Failed to start recording")
-                notifier.play_error()
-                return
-            if sound_cfg.get("sound_signal_start", True):
-                notifier.play_start()
-            logging.info("Recording started (mode: %s)", mode)
-
-        def on_release(mode: str) -> None:
-            nonlocal state
-            with state_lock:
-                if state != STATE_RECORDING:
-                    return
-                state = STATE_PROCESSING
-                captured_mode = _current_mode
-
-            def worker() -> None:
-                nonlocal state
-                try:
-                    audio_path = recorder.stop()
-                    if sound_cfg.get("sound_signal_processing", False):
-                        notifier.play_processing()
-                    if audio_path is None:
-                        logging.warning("Recording produced no audio")
-                        if sound_cfg.get("sound_signal_error", True):
-                            notifier.play_error()
-                        return
-
-                    # Silence detection (before normalize — loudnorm amplifies noise)
-                    if audio_cfg.get("recording_silence_detection", True):
-                        threshold = audio_cfg.get("recording_silence_threshold", SILENCE_RMS_THRESHOLD)
-                        if not processor.has_speech(audio_path, threshold=threshold):
-                            logging.info("Silence detected, skipping transcription")
-                            return
-
-                    # Normalize
-                    if audio_cfg.get("recording_normalize", True):
-                        try:
-                            audio_path = processor.normalize(audio_path)
-                        except RedictumError:
-                            logging.exception("Normalization failed, using raw audio")
-
-                    # Transcribe
-                    text = transcriber.transcribe(
-                        audio_path,
-                        translate=(captured_mode == "translate"),
-                    )
-                    if not text:
-                        logging.info("Transcription returned empty text")
-                        return
-
-                    logging.info("Transcribed (mode: %s): %d chars", captured_mode, len(text))
-
-                    # Apply prefix/postfix
-                    prefix = clip_cfg.get("paste_prefix", "")
-                    postfix = clip_cfg.get("paste_postfix", "")
-                    final_text = f"{prefix}{text}{postfix}"
-
-                    # Log transcript (must not block paste on failure)
-                    try:
-                        _log_transcript(transcripts_dir, final_text)
-                    except OSError:
-                        logging.exception("Failed to write transcript log")
-
-                    # Clipboard: save → copy → paste → restore
-                    if clip_cfg.get("paste_auto", True):
-                        saved = clipboard.save()
-                        clipboard.copy(final_text)
-                        clipboard.paste()
-                        # Restore previous clipboard after a short delay
-                        time.sleep(clip_cfg.get("paste_restore_delay", 0.3))
-                        if saved:
-                            clipboard.restore(saved)
-                    else:
-                        clipboard.copy(final_text)
-
-                    if sound_cfg.get("sound_signal_done", True):
-                        notifier.play_stop()
-                    housekeeper.rotate_audio()
-                    housekeeper.rotate_transcripts()
-                    housekeeper.rotate_logs()
-                    logging.info("Pipeline complete, state -> idle")
-                except RedictumError:
-                    logging.exception("Pipeline error")
-                    if sound_cfg.get("sound_signal_error", True):
-                        notifier.play_error()
-                except Exception:
-                    logging.exception("Unexpected pipeline error")
-                    if sound_cfg.get("sound_signal_error", True):
-                        notifier.play_error()
-                finally:
-                    with state_lock:
-                        state = STATE_IDLE
-
-            thread = threading.Thread(target=worker, daemon=True)
-            thread.start()
-
-        listener.start(on_hold, on_release)
+        # Start listening
+        listener.start(self._on_hold, self._on_release)
 
         # Wait for shutdown signal
         stop_event.wait()
 
         # Graceful shutdown
+        self._graceful_shutdown(listener)
+
+    def _on_hold(self, mode: str) -> None:
+        """Callback: hotkey held — start recording."""
+        with self._state_lock:
+            if self._state != STATE_IDLE:
+                return
+            self._state = STATE_RECORDING
+            self._current_mode = mode
+        try:
+            self._recorder.start()
+        except Exception:
+            with self._state_lock:
+                self._state = STATE_IDLE
+            logging.exception("Failed to start recording")
+            self._notifier.play_error()
+            return
+        if self._sound_cfg.get("sound_signal_start", True):
+            self._notifier.play_start()
+        logging.info("Recording started (mode: %s)", mode)
+
+    def _on_release(self, mode: str) -> None:
+        """Callback: hotkey released — launch processing pipeline."""
+        with self._state_lock:
+            if self._state != STATE_RECORDING:
+                return
+            self._state = STATE_PROCESSING
+            captured_mode = self._current_mode
+        thread = threading.Thread(
+            target=self._run_pipeline, args=(captured_mode,), daemon=True,
+        )
+        thread.start()
+
+    def _run_pipeline(self, mode: str) -> None:
+        """Record → silence check → normalize → transcribe → paste."""
+        try:
+            audio_path = self._recorder.stop()
+            if self._sound_cfg.get("sound_signal_processing", False):
+                self._notifier.play_processing()
+            if audio_path is None:
+                logging.warning("Recording produced no audio")
+                if self._sound_cfg.get("sound_signal_error", True):
+                    self._notifier.play_error()
+                return
+
+            # Silence detection (before normalize — loudnorm amplifies noise)
+            if self._audio_cfg.get("recording_silence_detection", True):
+                threshold = self._audio_cfg.get(
+                    "recording_silence_threshold", SILENCE_RMS_THRESHOLD,
+                )
+                if not self._processor.has_speech(audio_path, threshold=threshold):
+                    logging.info("Silence detected, skipping transcription")
+                    return
+
+            # Normalize
+            if self._audio_cfg.get("recording_normalize", True):
+                try:
+                    audio_path = self._processor.normalize(audio_path)
+                except RedictumError:
+                    logging.exception("Normalization failed, using raw audio")
+
+            # Transcribe
+            text = self._transcriber.transcribe(
+                audio_path,
+                translate=(mode == "translate"),
+            )
+            if not text:
+                logging.info("Transcription returned empty text")
+                return
+
+            logging.info("Transcribed (mode: %s): %d chars", mode, len(text))
+
+            # Apply prefix/postfix
+            prefix = self._clip_cfg.get("paste_prefix", "")
+            postfix = self._clip_cfg.get("paste_postfix", "")
+            final_text = f"{prefix}{text}{postfix}"
+
+            # Log transcript (must not block paste on failure)
+            try:
+                _log_transcript(self._transcripts_dir, final_text)
+            except OSError:
+                logging.exception("Failed to write transcript log")
+
+            # Clipboard: save → copy → paste → restore
+            if self._clip_cfg.get("paste_auto", True):
+                saved = self._clipboard.save()
+                self._clipboard.copy(final_text)
+                self._clipboard.paste()
+                # Restore previous clipboard after a short delay
+                time.sleep(self._clip_cfg.get("paste_restore_delay", 0.3))
+                if saved:
+                    self._clipboard.restore(saved)
+            else:
+                self._clipboard.copy(final_text)
+
+            if self._sound_cfg.get("sound_signal_done", True):
+                self._notifier.play_stop()
+            self._housekeeper.rotate_audio()
+            self._housekeeper.rotate_transcripts()
+            self._housekeeper.rotate_logs()
+            logging.info("Pipeline complete, state -> idle")
+        except RedictumError:
+            logging.exception("Pipeline error")
+            if self._sound_cfg.get("sound_signal_error", True):
+                self._notifier.play_error()
+        except Exception:
+            logging.exception("Unexpected pipeline error")
+            if self._sound_cfg.get("sound_signal_error", True):
+                self._notifier.play_error()
+        finally:
+            with self._state_lock:
+                self._state = STATE_IDLE
+
+    def _graceful_shutdown(self, listener: "HotkeyListener") -> None:
+        """Stop listener and wait for any in-progress pipeline to finish."""
         listener.stop()
-        if notifier:
-            notifier.cleanup()
-        with state_lock:
-            current = state
+        if self._notifier:
+            self._notifier.cleanup()
+        with self._state_lock:
+            current = self._state
         if current == STATE_RECORDING:
-            recorder.cancel()
+            self._recorder.cancel()
             logging.info("Cancelled recording during shutdown")
         elif current == STATE_PROCESSING:
             logging.info("Waiting for processing to finish...")
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
-                with state_lock:
-                    if state == STATE_IDLE:
+                with self._state_lock:
+                    if self._state == STATE_IDLE:
                         break
                 time.sleep(0.5)
-
         logging.info("Main loop stopped")
 
 
