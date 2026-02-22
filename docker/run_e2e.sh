@@ -178,7 +178,7 @@ cleanup_test() {
             done
         fi
     fi
-    rm -f "$WORKDIR/config.ini" "$WORKDIR/.initialized" "$WORKDIR/redictum.pid"
+    rm -f "$WORKDIR/config.ini" "$WORKDIR/.state" "$WORKDIR/redictum.pid"
     rm -f "$WORKDIR/fake-model.bin"
     rm -rf "$WORKDIR/audio" "$WORKDIR/transcripts" "$WORKDIR/logs"
 }
@@ -210,7 +210,7 @@ test_01_clean_first_run() {
     fix_whisper_config
 
     assert_file_exists "$WORKDIR/config.ini" || return 1
-    assert_file_exists "$WORKDIR/.initialized" || return 1
+    assert_file_exists "$WORKDIR/.state" || return 1
     assert_dir_exists "$WORKDIR/audio" || return 1
     assert_dir_exists "$WORKDIR/transcripts" || return 1
     assert_dir_exists "$WORKDIR/logs" || return 1
@@ -315,7 +315,7 @@ test_08_config_reset() {
     old_mtime=$(stat -c %Y "$WORKDIR/config.ini")
     sleep 1.1  # ensure different mtime (1-second resolution)
 
-    # --config deletes config.ini + .initialized, then start recreates them
+    # --config deletes config.ini + .state, then start recreates them
     python3 "$SCRIPT" --config start </dev/null >/dev/null 2>&1
     local rc=$?
     assert_exit_ok $rc || return 1
@@ -365,7 +365,7 @@ test_10_sigterm_graceful() {
 
 # T11: --set overrides config values at runtime (no sed needed)
 test_11_set_overrides() {
-    # First run to create config and .initialized
+    # First run to create config and .state
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     wait_for_daemon || return 1
     fix_whisper_config
@@ -392,7 +392,7 @@ test_11_set_overrides() {
 
 # T12: --set with unknown key exits with error
 test_12_set_invalid_key() {
-    # Need .initialized so it doesn't trigger first-run flow
+    # Need .state so it doesn't trigger first-run flow
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     wait_for_daemon || return 1
     fix_whisper_config

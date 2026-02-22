@@ -20,5 +20,5 @@ config.yaml.bak
 audio/
 transcripts/
 logs/
-.initialized
+.state
 AGENTS.md

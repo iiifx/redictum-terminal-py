@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Runtime state file (`.state`): replaces `.initialized` marker with persistent JSON state
+  (version tracking, build metadata, UI state)
+
 ## [1.2.1] - 2026-02-22
 
 ### Fixed

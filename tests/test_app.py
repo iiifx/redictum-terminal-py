@@ -17,13 +17,23 @@ def app(tmp_path):
 
 
 class TestIsInitialized:
-    """RedictumApp._is_initialized: marker file presence."""
+    """RedictumApp._is_initialized: state file with initialized_at key."""
 
-    def test_marker_exists(self, app, tmp_path):
-        (tmp_path / ".initialized").write_text("ok")
+    def test_state_with_initialized_at(self, app, tmp_path):
+        import json
+
+        (tmp_path / ".state").write_text(
+            json.dumps({"initialized_at": "2024-01-15T12:34:56"})
+        )
         assert app._is_initialized() is True
 
-    def test_marker_missing(self, app):
+    def test_state_missing(self, app):
+        assert app._is_initialized() is False
+
+    def test_state_without_initialized_at(self, app, tmp_path):
+        import json
+
+        (tmp_path / ".state").write_text(json.dumps({"version": "1.0.0"}))
         assert app._is_initialized() is False
 
 
@@ -157,8 +167,8 @@ class TestInitAbort:
         with pytest.raises(RedictumError, match="Setup incomplete"):
             app.init()
 
-        # .initialized should NOT exist
-        assert not (tmp_path / ".initialized").exists()
+        # .state should NOT exist (no initialized_at written)
+        assert not (tmp_path / ".state").exists()
 
     def test_init_aborts_before_whisper_when_core_missing(self, app, monkeypatch, tmp_path):
         """init() aborts after stage2 without asking about whisper."""
@@ -189,7 +199,7 @@ class TestInitAbort:
             mock_whisper.assert_not_called()
 
     def test_init_marks_initialized_when_deps_ok(self, app, monkeypatch, tmp_path):
-        """init() writes .initialized when all deps are satisfied."""
+        """init() writes .state with initialized_at when all deps are satisfied."""
         import sys
         from unittest.mock import MagicMock
 
@@ -217,7 +227,12 @@ class TestInitAbort:
         )
 
         app.init()
-        assert (tmp_path / ".initialized").exists()
+        import json
+
+        state_path = tmp_path / ".state"
+        assert state_path.exists()
+        state = json.loads(state_path.read_text())
+        assert "initialized_at" in state
 
 
 class TestApplyOverrides:

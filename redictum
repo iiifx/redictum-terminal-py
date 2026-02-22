@@ -42,7 +42,7 @@ STATE_RECORDING = "recording"
 STATE_PROCESSING = "processing"
 
 PID_FILENAME = "redictum.pid"
-INITIALIZED_FILENAME = ".initialized"
+STATE_FILENAME = ".state"
 STOP_TIMEOUT = 3.0
 
 PATH_KEYS: tuple[tuple[str, ...], ...] = (
@@ -525,6 +525,55 @@ class DirectoryManager:
             (self._script_dir / name).mkdir(exist_ok=True)
 
 
+class StateManager:
+    """Persistent JSON state file for runtime metadata.
+
+    Stores version tracking, build metadata, and UI state between sessions.
+    """
+
+    def __init__(self, base_dir: Path) -> None:
+        self._path = base_dir / STATE_FILENAME
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def load(self) -> dict:
+        """Load state from disk. Returns {} on missing/corrupt file."""
+        import json
+
+        if not self._path.exists():
+            return {}
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            logging.warning("Corrupt state file %s: %s", self._path, exc)
+            return {}
+        if not isinstance(data, dict):
+            logging.warning("State file %s: expected dict, got %s", self._path, type(data).__name__)
+            return {}
+        return data
+
+    def save(self, state: dict) -> None:
+        """Write state dict to disk as formatted JSON."""
+        import json
+
+        self._path.write_text(
+            json.dumps(state, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Load state and return a single key."""
+        return self.load().get(key, default)
+
+    def set(self, key: str, value: Any) -> None:
+        """Load state, set a single key, and save."""
+        state = self.load()
+        state[key] = value
+        self.save(state)
+
+
 # ---------------------------------------------------------------------------
 # Stubs
 # ---------------------------------------------------------------------------
@@ -544,9 +593,11 @@ class Diagnostics:
     whisper.cpp — offer auto-install if missing (clone, build, model download).
     """
 
-    def __init__(self, config: dict[str, Any], config_mgr: ConfigManager) -> None:
+    def __init__(self, config: dict[str, Any], config_mgr: ConfigManager,
+                 state_mgr: StateManager | None = None) -> None:
         self._config = config
         self._config_mgr = config_mgr
+        self._state_mgr = state_mgr
 
     # -- Stage 1: critical checks -------------------------------------------
 
@@ -990,7 +1041,7 @@ class Diagnostics:
             prompt = "\nInstall whisper.cpp?"
 
         if _confirm(prompt, default=True):
-            installer = WhisperInstaller(self._config_mgr)
+            installer = WhisperInstaller(self._config_mgr, self._state_mgr)
             installer.install()
         else:
             _rprint(
@@ -1016,9 +1067,16 @@ class WhisperInstaller:
         ("tiny", "ggml-tiny.bin", "~75 MB, fastest"),
     ]
 
-    def __init__(self, config_mgr: ConfigManager) -> None:
+    def __init__(self, config_mgr: ConfigManager,
+                 state_mgr: StateManager | None = None) -> None:
         self._config_mgr = config_mgr
+        self._state_mgr = state_mgr
         self._install_dir = Path.home() / "whisper.cpp"
+
+    def _record_build_type(self, cuda: bool) -> None:
+        """Save whisper build type (cuda/cpu) to state."""
+        if self._state_mgr is not None:
+            self._state_mgr.set("whisper_build", "cuda" if cuda else "cpu")
 
     # -- Public API ----------------------------------------------------------
 
@@ -1051,6 +1109,7 @@ class WhisperInstaller:
 
         model_path = self._select_and_download()
         self._update_config(cli_path, model_path)
+        self._record_build_type(cuda_available)
         _rprint("\n[green]whisper.cpp setup complete![/green]")
 
     def _reconfigure(self, cli_path: Path) -> None:
@@ -1080,7 +1139,10 @@ class WhisperInstaller:
         self._update_config(cli_path, model_path)
 
         if need_rebuild:
+            self._record_build_type(cuda=True)
             _rprint("\n[green]whisper.cpp reconfigured![/green]")
+        else:
+            self._record_build_type(cuda=cuda_linked)
 
     # -- CUDA ----------------------------------------------------------------
 
@@ -2696,7 +2758,7 @@ class RedictumApp:
         self._dir_mgr = DirectoryManager(script_dir)
         self._pid_path = script_dir / PID_FILENAME
         self._log_path = self._make_log_path()
-        self._init_marker = script_dir / INITIALIZED_FILENAME
+        self._state_mgr = StateManager(script_dir)
         self._config: dict[str, Any] = {}
         self._overrides = overrides or []
 
@@ -2719,14 +2781,15 @@ class RedictumApp:
         return config
 
     def _is_initialized(self) -> bool:
-        """Check if the first-run marker file exists."""
-        return self._init_marker.exists()
+        """Check if state contains an ``initialized_at`` timestamp."""
+        return bool(self._state_mgr.get("initialized_at"))
 
     def _mark_initialized(self) -> None:
-        """Create the first-run marker file."""
-        self._init_marker.write_text(
-            f"initialized {datetime.now().isoformat()}\n"
-        )
+        """Record initialization timestamp and version in state."""
+        state = self._state_mgr.load()
+        state["initialized_at"] = datetime.now().isoformat()
+        state["version"] = VERSION
+        self._state_mgr.save(state)
 
     def init(self) -> dict[str, Any]:
         """Initialize config, directories, and run diagnostics.
@@ -2739,7 +2802,7 @@ class RedictumApp:
         """
         config = self._load_config()
         self._dir_mgr.ensure()
-        diag = Diagnostics(config, self._config_mgr)
+        diag = Diagnostics(config, self._config_mgr, self._state_mgr)
         diag.run_stage1()
         diag.run_stage2()
         # Early exit if core APT/pip deps still missing after stage 2
@@ -2762,7 +2825,7 @@ class RedictumApp:
         diag.run_optional()
         # Reload config — run_optional() may have updated settings on disk
         config = self._load_config()
-        diag = Diagnostics(config, self._config_mgr)
+        diag = Diagnostics(config, self._config_mgr, self._state_mgr)
         diag.check_whisper()
         # Reload config — check_whisper() may have updated paths on disk
         config = self._load_config()
@@ -2871,10 +2934,13 @@ class RedictumApp:
 
     def _show_config_hint(self) -> None:
         """Show config file location and examples after first run."""
+        if self._state_mgr.get("config_hint_shown"):
+            return
         _rprint(f"\n[bold]Configuration:[/bold] {self._config_mgr.path}")
         _rprint("  Examples:")
         _rprint('    \u2022 Change hotkey:   [cyan]hotkey_key = "F12"[/cyan]          (default: Insert)')
         _rprint('    \u2022 Change language: [cyan]whisper_language = "en"[/cyan]      (default: auto)')
+        self._state_mgr.set("config_hint_shown", True)
 
     def run_interactive(self) -> int:
         """Run in interactive (foreground) mode.
@@ -2891,7 +2957,7 @@ class RedictumApp:
             if self._deps_ok(self._config):
                 # Detect optional deps that disappeared after setup
                 if self._check_optional_mismatch(self._config):
-                    diag = Diagnostics(self._config, self._config_mgr)
+                    diag = Diagnostics(self._config, self._config_mgr, self._state_mgr)
                     diag.run_optional()
                     self._config = self._load_config()
                 ready = False
@@ -2905,6 +2971,11 @@ class RedictumApp:
         if first_run:
             self._first_run_language_check(self._config)
             self._show_config_hint()
+
+        state = self._state_mgr.load()
+        state["last_run"] = datetime.now().isoformat()
+        state["version"] = VERSION
+        self._state_mgr.save(state)
 
         stop_event = threading.Event()
 
@@ -2936,7 +3007,7 @@ class RedictumApp:
             if self._deps_ok(self._config):
                 # Detect optional deps that disappeared after setup
                 if self._check_optional_mismatch(self._config):
-                    diag = Diagnostics(self._config, self._config_mgr)
+                    diag = Diagnostics(self._config, self._config_mgr, self._state_mgr)
                     diag.run_optional()
                     self._config = self._load_config()
             else:
@@ -2947,6 +3018,11 @@ class RedictumApp:
         if first_run:
             self._first_run_language_check(self._config)
             self._show_config_hint()
+
+        state = self._state_mgr.load()
+        state["last_run"] = datetime.now().isoformat()
+        state["version"] = VERSION
+        self._state_mgr.save(state)
 
         daemon = Daemon(self._pid_path, self._log_path)
         _rprint("[bold]Redictum Terminal — daemon started.[/bold]")
@@ -2994,7 +3070,7 @@ class RedictumApp:
         self._config = self._load_config()
         self._dir_mgr.ensure()
         _rprint("[bold]Redictum \u2014 Dependency Setup[/bold]")
-        diag = Diagnostics(self._config, self._config_mgr)
+        diag = Diagnostics(self._config, self._config_mgr, self._state_mgr)
         diag.run_optional(force=True)
         self._config = self._load_config()
         _rprint("\n[green]Setup complete.[/green]")
@@ -3012,7 +3088,7 @@ class RedictumApp:
         logging.info("Subcommand: whisper")
         self._config = self._load_config()
         self._dir_mgr.ensure()
-        installer = WhisperInstaller(self._config_mgr)
+        installer = WhisperInstaller(self._config_mgr, self._state_mgr)
         installer.install()
         logging.info("Whisper subcommand complete")
         return EXIT_OK
@@ -3419,9 +3495,9 @@ def main() -> int:
         config_path = script_dir / "config.ini"
         if config_path.exists():
             config_path.unlink()
-        init_marker = script_dir / INITIALIZED_FILENAME
-        if init_marker.exists():
-            init_marker.unlink()
+        state_path = script_dir / STATE_FILENAME
+        if state_path.exists():
+            state_path.unlink()
 
     try:
         if args.command is None:
