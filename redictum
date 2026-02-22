@@ -52,6 +52,9 @@ REQUIRED_DIRS = ("audio", "transcripts", "logs")
 
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHANNELS = 1
+# Default RMS threshold for silence detection (applied to raw audio).
+# Typical silence with mic noise: RMS ~50-150. Speech mixed with silence: RMS ~300+.
+SILENCE_RMS_THRESHOLD = 200
 
 APT_PACKAGES: dict[str, str] = {
     "ffmpeg": "ffmpeg",
@@ -86,6 +89,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "audio": {
         "recording_device": "auto",
         "recording_normalize": True,
+        "recording_silence_detection": True,
+        "recording_silence_threshold": 200,
     },
     "input": {
         "hotkey_key": "Insert",
@@ -145,6 +150,14 @@ recording_device = "auto"
 
 # Normalize audio via ffmpeg loudnorm before transcription
 recording_normalize = true
+
+# Skip transcription if recording contains only silence (RMS energy check)
+# Prevents whisper hallucinations on silent recordings
+recording_silence_detection = true
+
+# RMS energy threshold for silence detection (applied to raw audio before normalize)
+# Typical mic noise: ~50-150, speech with silence: ~300+. Lower = more sensitive
+recording_silence_threshold = 200
 
 # --- Input -------------------------------------------------------------------
 
@@ -253,6 +266,7 @@ class ConfigManager:
     # Types that should be parsed from INI string values.
     _BOOL_KEYS: frozenset[str] = frozenset({
         "recording_normalize",
+        "recording_silence_detection",
         "paste_auto",
         "sound_signal_start",
         "sound_signal_processing",
@@ -265,6 +279,7 @@ class ConfigManager:
         "audio_max_files",
         "transcripts_max_files",
         "logs_max_files",
+        "recording_silence_threshold",
     })
     _FLOAT_KEYS: frozenset[str] = frozenset({
         "hotkey_hold_delay",
@@ -1608,6 +1623,27 @@ class AudioProcessor:
         )
         return output_path
 
+    @staticmethod
+    def has_speech(audio_path: Path, threshold: float = SILENCE_RMS_THRESHOLD) -> bool:
+        """Check if audio contains speech by measuring RMS energy.
+
+        Args:
+            audio_path: Path to a 16-bit PCM WAV file.
+            threshold: RMS level below which audio is considered silence.
+
+        Returns:
+            True if RMS is above threshold (likely contains speech).
+        """
+        with open(audio_path, "rb") as f:
+            f.seek(44)  # skip WAV header
+            data = f.read()
+        if len(data) < 2:
+            return False
+        samples = struct.unpack(f"<{len(data) // 2}h", data)
+        rms = (sum(s * s for s in samples) / len(samples)) ** 0.5
+        logging.info("Audio RMS: %.1f (threshold: %.1f)", rms, threshold)
+        return rms > threshold
+
 
 def _detect_language() -> str:
     """Detect language code from system locale (e.g., 'ru', 'en', 'uk').
@@ -2514,6 +2550,13 @@ class RedictumApp:
                         if sound_cfg.get("sound_signal_error", True):
                             notifier.play_error()
                         return
+
+                    # Silence detection (before normalize — loudnorm amplifies noise)
+                    if audio_cfg.get("recording_silence_detection", True):
+                        threshold = audio_cfg.get("recording_silence_threshold", SILENCE_RMS_THRESHOLD)
+                        if not processor.has_speech(audio_path, threshold=threshold):
+                            logging.info("Silence detected, skipping transcription")
+                            return
 
                     # Normalize
                     if audio_cfg.get("recording_normalize", True):
