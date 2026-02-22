@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 - Fix race condition: read `_current_mode` under `state_lock` in `on_release()`
 - Validate whisper CLI and model paths on startup with clear error messages
+- Increase clipboard restore delay from 200ms to 300ms; add configurable `paste_restore_delay`
 
 ## [1.1.0] - 2026-02-21
 

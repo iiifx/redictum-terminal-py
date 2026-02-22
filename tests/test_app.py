@@ -130,6 +130,13 @@ class TestApplyOverrides:
         _apply_overrides(config, ["input.hotkey_hold_delay=0.3"])
         assert config["input"]["hotkey_hold_delay"] == pytest.approx(0.3)
 
+    def test_paste_restore_delay_override(self):
+        from redictum import _apply_overrides
+
+        config = {"clipboard": {"paste_restore_delay": 0.3}}
+        _apply_overrides(config, ["clipboard.paste_restore_delay=0.5"])
+        assert config["clipboard"]["paste_restore_delay"] == pytest.approx(0.5)
+
     def test_quoted_string_stripped(self):
         from redictum import _apply_overrides
 

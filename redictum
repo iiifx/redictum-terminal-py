@@ -96,6 +96,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "paste_auto": True,
         "paste_prefix": "",
         "paste_postfix": " ",
+        "paste_restore_delay": 0.3,
     },
     "notification": {
         "sound_signal_volume": 30,
@@ -169,6 +170,10 @@ paste_prefix = ""
 
 # Text to append after transcription result (use quotes for whitespace)
 paste_postfix = " "
+
+# Delay (seconds) before restoring clipboard after paste
+# Increase if paste arrives too late on slow systems
+paste_restore_delay = 0.3
 
 # --- Notifications -----------------------------------------------------------
 
@@ -2540,7 +2545,7 @@ class RedictumApp:
                         clipboard.copy(final_text)
                         clipboard.paste()
                         # Restore previous clipboard after a short delay
-                        time.sleep(0.2)
+                        time.sleep(clip_cfg.get("paste_restore_delay", 0.3))
                         if saved:
                             clipboard.restore(saved)
                     else:
