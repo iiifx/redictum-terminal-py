@@ -7,21 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-02-22
+
 ### Added
 - `./redictum setup` subcommand to re-run optional dependency setup (force-check all features, re-enable on install)
 - Startup detection of missing optional tools: warns and offers to install/disable when a dependency disappears after setup
 - Logging for subcommands (`setup`, `whisper`, `language`): each creates a labeled log file (`redictum_setup_*.log`, etc.)
+- Language selector wizard: `./redictum language` to change transcription language
+- First-run language prompt: offer to change auto-detected language on first start
+- Comprehensive diagnostics logging: dependency checks, package installation, and user prompt responses are now written to the log file
+- System information logged at startup: OS, kernel, Python, GPU, CUDA, RAM, locale
+- Language-dependent prompts (`LANGUAGE_PROMPTS`): 15 built-in prompts auto-selected by transcription language (en, zh, hi, es, ar, fr, pt, ru, de, ja, uk, ko, it, tr, pl)
 
 ### Changed
 - Make paplay, ffmpeg, xdotool optional with interactive prompts; choice persisted in config
 - Remove `rich` from mandatory pip dependencies (plain-text fallback already exists)
 - Defer cmake/build-essential install to whisper.cpp build step
-
-### Added
-- Language selector wizard: `./redictum language` to change transcription language
-- First-run language prompt: offer to change auto-detected language on first start
-- Comprehensive diagnostics logging: dependency checks, package installation, and user prompt responses are now written to the log file
-- System information logged at startup: OS, kernel, Python, GPU, CUDA, RAM, locale
 
 ### Fixed
 - Abort setup when user declines critical dependencies instead of entering broken main loop
@@ -33,9 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Refactor `_main_loop` monolith into focused methods: `_on_hold`, `_on_release`, `_run_pipeline`, `_graceful_shutdown`
 - Fix English prompt overriding `-l ru` on large whisper models: auto-select prompt by language
 - Suppress false `[ERROR] arecord exited with code 1` on normal recording stop (SIGTERM is expected)
-
-### Added
-- Language-dependent prompts (`LANGUAGE_PROMPTS`): 15 built-in prompts auto-selected by transcription language (en, zh, hi, es, ar, fr, pt, ru, de, ja, uk, ko, it, tr, pl)
 
 ## [1.1.0] - 2026-02-21
 

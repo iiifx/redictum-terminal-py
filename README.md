@@ -27,10 +27,11 @@ Run:
 
 On first run, the script will:
 1. Check system dependencies (Python, PulseAudio, ALSA, X11)
-2. Offer to install missing packages (`ffmpeg`, `xclip`, `xdotool`, `cmake`, etc.)
-3. Install Python packages (`pynput`, `rich`)
+2. Install core packages (`xclip`, `pynput`)
+3. Offer optional tools (`paplay` for sound, `ffmpeg` for normalization, `xdotool` for auto-paste)
 4. Offer to build whisper.cpp (with CUDA if available)
 5. Download a whisper model
+6. Offer to change transcription language
 
 ### Requirements
 
@@ -49,8 +50,9 @@ On first run, the script will:
 - **Daemon mode** — runs in background, start/stop/status commands
 - **Sound feedback** — distinct tones for recording, processing, done, error
 - **Auto-setup** — installs dependencies, builds whisper.cpp, downloads models
-- **Language auto-detection** — picks language from system locale, or set manually
-- **Audio normalization** — ffmpeg loudnorm for consistent transcription quality
+- **Language selector** — auto-detects from locale; `./redictum language` wizard to change anytime
+- **Audio normalization** — ffmpeg loudnorm for consistent transcription quality (optional)
+- **Silence detection** — skips whisper on silent recordings to prevent hallucinations
 - **File rotation** — automatic cleanup of old audio and transcript files
 - **INI config** — fully configurable with comments, generated on first run (zero external dependencies)
 
@@ -65,8 +67,10 @@ On first run, the script will:
 ~/redictum/redictum stop        # stop daemon
 ~/redictum/redictum status      # check if daemon is running
 
-# Whisper setup
-~/redictum/redictum whisper     # install/reconfigure whisper.cpp
+# Setup & configuration
+~/redictum/redictum setup      # re-run optional dependency setup
+~/redictum/redictum whisper    # install/reconfigure whisper.cpp
+~/redictum/redictum language   # change transcription language
 ```
 
 ## License
