@@ -1628,8 +1628,16 @@ class Transcriber:
         prompt: str = "",
         timeout: int = 120,
     ) -> None:
-        self._cli = whisper_cli
-        self._model = model_path
+        cli = Path(whisper_cli)
+        if not cli.exists():
+            raise RedictumError(f"Whisper CLI not found: {cli}")
+        if not os.access(cli, os.X_OK):
+            raise RedictumError(f"Whisper CLI is not executable: {cli}")
+        model = Path(model_path)
+        if not model.is_file():
+            raise RedictumError(f"Whisper model not found: {model}")
+        self._cli = str(cli)
+        self._model = str(model)
         self._language = language
         self._prompt = prompt
         self._timeout = timeout
