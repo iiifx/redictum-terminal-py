@@ -1,6 +1,8 @@
 """Tests for Daemon: PID file handling, is_running, status."""
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
 from unittest.mock import patch
 
@@ -75,3 +77,23 @@ class TestStatus:
 
     def test_no_pid_file(self, daemon):
         assert daemon.status() is None
+
+
+class TestWritePid:
+    """Daemon._write_pid: atomic creation with explicit permissions."""
+
+    def test_creates_file_with_pid(self, daemon):
+        daemon._write_pid()
+        content = daemon._pid_path.read_text()
+        assert content.strip() == str(os.getpid())
+
+    def test_not_world_writable(self, daemon):
+        daemon._write_pid()
+        mode = daemon._pid_path.stat().st_mode
+        assert not bool(mode & stat.S_IWOTH)
+
+    def test_overwrites_stale_file(self, daemon):
+        daemon._pid_path.write_text("99999\n")
+        daemon._write_pid()
+        content = daemon._pid_path.read_text()
+        assert content.strip() == str(os.getpid())

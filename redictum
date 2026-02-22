@@ -431,7 +431,14 @@ class ConfigManager:
         """Parse a raw INI string value into the appropriate Python type."""
         value = cls._strip_quotes(raw)
         if key in cls._BOOL_KEYS:
-            return value.lower() in ("true", "yes", "1", "on")
+            lower = value.lower()
+            if lower in ("true", "yes", "1", "on"):
+                return True
+            if lower in ("false", "no", "0", "off"):
+                return False
+            raise RedictumError(
+                f"Config '{key}': expected boolean (true/false), got '{value}'"
+            )
         if key in cls._INT_KEYS:
             try:
                 return int(value)
@@ -723,6 +730,10 @@ class Diagnostics:
 
     def _install_apt(self, packages: list[str]) -> bool:
         """Run sudo apt install for the given packages. Return success."""
+        for pkg in packages:
+            if not pkg or len(pkg) < 2 or not re.match(r'^[a-z0-9][a-z0-9+.-]+$', pkg):
+                logging.error("Invalid apt package name: %s", pkg)
+                return False
         cmd = ["sudo", "apt", "install", "-y", *packages]
         _rprint(f"[dim]Running: {' '.join(cmd)}[/dim]")
         logging.info("Running: %s", " ".join(cmd))
@@ -1654,8 +1665,17 @@ class Daemon:
             return True
 
     def _write_pid(self) -> None:
-        """Write current PID to the PID file."""
-        self._pid_path.write_text(f"{os.getpid()}\n")
+        """Write current PID to the PID file with explicit permissions."""
+        pid_data = f"{os.getpid()}\n".encode("utf-8")
+        flags = os.O_WRONLY | os.O_CREAT
+        try:
+            fd = os.open(str(self._pid_path), flags | os.O_EXCL, 0o644)
+        except FileExistsError:
+            fd = os.open(str(self._pid_path), flags | os.O_TRUNC, 0o644)
+        try:
+            os.write(fd, pid_data)
+        finally:
+            os.close(fd)
 
     def _cleanup(self) -> None:
         """Remove PID file (atexit callback)."""
@@ -1705,7 +1725,7 @@ class Daemon:
 
         # Child 1: new session
         os.setsid()
-        os.umask(0)
+        os.umask(0o022)
 
         # Second fork
         try:

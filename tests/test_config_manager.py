@@ -236,6 +236,15 @@ class TestLoad:
         with pytest.raises(RedictumError, match="expected number"):
             mgr.load()
 
+    def test_invalid_bool_in_ini_raises(self, config_dir):
+        from redictum import RedictumError
+
+        tmp_path, mgr = config_dir
+        ini_text = "[audio]\nrecording_normalize = maybe\n"
+        (tmp_path / "config.ini").write_text(ini_text, encoding="utf-8")
+        with pytest.raises(RedictumError, match="expected boolean"):
+            mgr.load()
+
     def test_quoted_string_values(self, config_dir):
         tmp_path, mgr = config_dir
         ini_text = '[clipboard]\npaste_prefix = ">>> "\npaste_postfix = ""\n'

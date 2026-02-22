@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Fix `os.umask(0)` in daemon mode: all files were created world-writable (now `0o022`)
+- Fix PID file created without explicit permissions: use atomic `O_EXCL` creation with `0o644`
+- Add apt package name validation in `_install_apt()` to prevent command injection (defense-in-depth)
+- Reject invalid boolean values in config instead of silently treating them as `false`
+
 ## [1.2.0] - 2026-02-22
 
 ### Added

@@ -110,6 +110,44 @@ class TestFindMissingApt:
         assert "xclip" in missing
 
 
+class TestInstallAptValidation:
+    """Diagnostics._install_apt: package name validation."""
+
+    def test_valid_packages_accepted(self, make_diagnostics, monkeypatch):
+        from unittest.mock import MagicMock
+        monkeypatch.setattr(
+            "subprocess.run", lambda cmd, **kw: MagicMock(returncode=0),
+        )
+        diag = make_diagnostics()
+        assert diag._install_apt(["xclip"]) is True
+        assert diag._install_apt(["python3-pynput"]) is True
+        assert diag._install_apt(["build-essential"]) is True
+
+    def test_malicious_name_rejected(self, make_diagnostics, monkeypatch):
+        from unittest.mock import MagicMock
+        mock_run = MagicMock()
+        monkeypatch.setattr("subprocess.run", mock_run)
+        diag = make_diagnostics()
+        assert diag._install_apt(["xclip; rm -rf /"]) is False
+        mock_run.assert_not_called()
+
+    def test_empty_name_rejected(self, make_diagnostics, monkeypatch):
+        from unittest.mock import MagicMock
+        mock_run = MagicMock()
+        monkeypatch.setattr("subprocess.run", mock_run)
+        diag = make_diagnostics()
+        assert diag._install_apt([""]) is False
+        mock_run.assert_not_called()
+
+    def test_uppercase_rejected(self, make_diagnostics, monkeypatch):
+        from unittest.mock import MagicMock
+        mock_run = MagicMock()
+        monkeypatch.setattr("subprocess.run", mock_run)
+        diag = make_diagnostics()
+        assert diag._install_apt(["Xclip"]) is False
+        mock_run.assert_not_called()
+
+
 class TestFindMissingPip:
     """Diagnostics._find_missing_pip: mock __import__."""
 
