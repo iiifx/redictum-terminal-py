@@ -357,6 +357,8 @@ class ConfigManager:
             )
 
         self._path.write_text(text, encoding="utf-8")
+        # Security: Set restrictive permissions on config file
+        self._path.chmod(0o600)
 
     # -- migration -----------------------------------------------------------
 
@@ -417,6 +419,8 @@ class ConfigManager:
             )
 
         self._path.write_text(text, encoding="utf-8")
+        # Security: Set restrictive permissions on config file
+        self._path.chmod(0o600)
         self._yaml_path.rename(self._yaml_path.with_suffix(".yaml.bak"))
         logging.info("Migrated config.yaml → config.ini")
 
@@ -425,13 +429,23 @@ class ConfigManager:
     def _write_default(self) -> None:
         """Write DEFAULT_CONFIG_INI template with comments."""
         self._path.write_text(DEFAULT_CONFIG_INI, encoding="utf-8")
+        # Security: Set restrictive permissions on config file
+        self._path.chmod(0o600)
 
     @classmethod
     def _parse_value(cls, key: str, raw: str) -> Any:
         """Parse a raw INI string value into the appropriate Python type."""
         value = cls._strip_quotes(raw)
         if key in cls._BOOL_KEYS:
-            return value.lower() in ("true", "yes", "1", "on")
+            lower_val = value.lower()
+            if lower_val in ("true", "yes", "1", "on"):
+                return True
+            elif lower_val in ("false", "no", "0", "off"):
+                return False
+            else:
+                raise RedictumError(
+                    f"Config '{key}': expected boolean (true/false), got '{value}'"
+                )
         if key in cls._INT_KEYS:
             try:
                 return int(value)
@@ -723,6 +737,13 @@ class Diagnostics:
 
     def _install_apt(self, packages: list[str]) -> bool:
         """Run sudo apt install for the given packages. Return success."""
+        # Security: Validate package names to prevent injection
+        for pkg in packages:
+            if not re.match(r'^[a-z0-9][a-z0-9+.-]*$', pkg):
+                logging.error("Invalid package name: %s", pkg)
+                _rprint(f"[red]Invalid package name: {pkg}[/red]")
+                return False
+        
         cmd = ["sudo", "apt", "install", "-y", *packages]
         _rprint(f"[dim]Running: {' '.join(cmd)}[/dim]")
         logging.info("Running: %s", " ".join(cmd))
@@ -1654,8 +1675,21 @@ class Daemon:
             return True
 
     def _write_pid(self) -> None:
-        """Write current PID to the PID file."""
-        self._pid_path.write_text(f"{os.getpid()}\n")
+        """Write current PID to the PID file with restrictive permissions."""
+        # Security: Create with explicit permissions to prevent unauthorized access
+        # Try O_EXCL first for atomicity, fall back to O_TRUNC if file exists
+        pid = os.getpid()
+        flags = os.O_WRONLY | os.O_CREAT
+        try:
+            # Try exclusive creation first (atomic, prevents races)
+            fd = os.open(str(self._pid_path), flags | os.O_EXCL, 0o644)
+        except FileExistsError:
+            # File exists, truncate it (after stale check in start())
+            fd = os.open(str(self._pid_path), flags | os.O_TRUNC, 0o644)
+        try:
+            os.write(fd, f"{pid}\n".encode("utf-8"))
+        finally:
+            os.close(fd)
 
     def _cleanup(self) -> None:
         """Remove PID file (atexit callback)."""
@@ -1705,7 +1739,7 @@ class Daemon:
 
         # Child 1: new session
         os.setsid()
-        os.umask(0)
+        os.umask(0o022)  # Security: Prevent world-writable files
 
         # Second fork
         try:
