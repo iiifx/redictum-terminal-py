@@ -2675,11 +2675,21 @@ class RedictumApp:
         self._config_mgr = ConfigManager(script_dir)
         self._dir_mgr = DirectoryManager(script_dir)
         self._pid_path = script_dir / PID_FILENAME
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._log_path = script_dir / "logs" / f"redictum_{ts}.log"
+        self._log_path = self._make_log_path()
         self._init_marker = script_dir / INITIALIZED_FILENAME
         self._config: dict[str, Any] = {}
         self._overrides = overrides or []
+
+    def _make_log_path(self, label: str = "") -> Path:
+        """Build a log file path with optional label in the name.
+
+        Returns:
+            ``logs/redictum_YYYYMMDD_HHMMSS.log`` or
+            ``logs/redictum_<label>_YYYYMMDD_HHMMSS.log``.
+        """
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = f"redictum_{label}_{ts}.log" if label else f"redictum_{ts}.log"
+        return self._script_dir / "logs" / name
 
     def _load_config(self) -> dict[str, Any]:
         """Load config and apply CLI overrides (if any)."""
@@ -2958,6 +2968,7 @@ class RedictumApp:
         Returns:
             Exit code.
         """
+        self._log_path = self._make_log_path("setup")
         setup_logging(self._log_path)
         logging.info("Subcommand: setup")
         self._config = self._load_config()
@@ -2976,6 +2987,7 @@ class RedictumApp:
         Returns:
             Exit code.
         """
+        self._log_path = self._make_log_path("whisper")
         setup_logging(self._log_path)
         logging.info("Subcommand: whisper")
         self._config = self._load_config()
@@ -2991,6 +3003,7 @@ class RedictumApp:
         Returns:
             Exit code.
         """
+        self._log_path = self._make_log_path("language")
         setup_logging(self._log_path)
         logging.info("Subcommand: language")
         self._config = self._load_config()
