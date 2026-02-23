@@ -3001,23 +3001,21 @@ class RedictumApp:
         setup_logging(self._log_path)
         _log_system_info()
 
-        first_run = not self._is_initialized()
-        if not first_run:
-            self._config = self.init_quick()
-            if self._deps_ok(self._config):
-                # Detect optional deps that disappeared after setup
-                if self._check_optional_mismatch(self._config):
-                    diag = Diagnostics(self._config, self._config_mgr, self._state_mgr)
-                    diag.run_optional()
-                    self._config = self._load_config()
-            else:
-                self._config = self.init()
+        if not self._is_initialized():
+            raise RedictumError(
+                "Redictum is not initialized. "
+                "Run Redictum in interactive mode first to complete setup."
+            )
+
+        self._config = self.init_quick()
+        if self._deps_ok(self._config):
+            # Detect optional deps that disappeared after setup
+            if self._check_optional_mismatch(self._config):
+                diag = Diagnostics(self._config, self._config_mgr, self._state_mgr)
+                diag.run_optional()
+                self._config = self._load_config()
         else:
             self._config = self.init()
-
-        if first_run:
-            self._first_run_language_check(self._config)
-            self._show_config_hint()
 
         state = self._state_mgr.load()
         state["last_run"] = datetime.now().isoformat()

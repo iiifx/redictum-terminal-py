@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (version tracking, build metadata, UI state)
 
 ### Fixed
+- Daemon mode (`start`) no longer runs interactive setup when not initialized —
+  prints error and exits instead of hanging on prompts with `stdin=/dev/null`
 - E2E tests: place fake whisper-cli and model at default config paths so first-run
   init passes without interactive prompts
 

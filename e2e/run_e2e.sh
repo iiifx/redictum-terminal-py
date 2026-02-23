@@ -156,12 +156,45 @@ wait_for_daemon() {
     return 0
 }
 
-# After init(), config.ini has default ~/whisper.cpp/... paths that don't
-# exist.  Sed them to our fakes so _deps_ok() returns True on next start.
-fix_whisper_config() {
-    sed -i 's|whisper_cli = .*|whisper_cli = "/usr/local/bin/whisper-cli"|' "$WORKDIR/config.ini"
+# Create a pre-initialized environment so run_start() passes the guard.
+# Daemon mode no longer runs init() — it requires prior interactive setup.
+prepare_env() {
+    echo '{"initialized_at": "2024-01-01T00:00:00", "version": "1.0.0"}' > "$WORKDIR/.state"
     touch "$WORKDIR/fake-model.bin"
-    sed -i 's|whisper_model = .*|whisper_model = "'$WORKDIR'/fake-model.bin"|' "$WORKDIR/config.ini"
+    cat > "$WORKDIR/config.ini" <<CONF
+[dependency]
+whisper_cli = "/usr/local/bin/whisper-cli"
+whisper_model = "$WORKDIR/fake-model.bin"
+whisper_language = "auto"
+whisper_prompt = "auto"
+whisper_timeout = 120
+
+[audio]
+recording_device = "pulse"
+recording_normalize = true
+recording_silence_detection = true
+recording_silence_threshold = 200
+
+[input]
+hotkey_key = "Insert"
+hotkey_hold_delay = 0.6
+hotkey_translate_key = "ctrl+Insert"
+
+[clipboard]
+paste_auto = true
+paste_restore_delay = 0.3
+
+[notification]
+sound_signal_start = true
+sound_signal_processing = false
+sound_signal_done = true
+sound_signal_error = true
+
+[transcript]
+log_enabled = true
+log_max_files = 30
+CONF
+    mkdir -p "$WORKDIR/audio" "$WORKDIR/transcripts" "$WORKDIR/logs"
 }
 
 cleanup_test() {
@@ -201,28 +234,24 @@ run_test() {
 # Test cases
 # =============================================================================
 
-# T01: Clean first run — start creates config, marker, and directories
-test_01_clean_first_run() {
-    python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
+# T01: Daemon refuses to start without prior initialization
+test_01_start_refuses_without_init() {
+    local output
+    output=$(python3 "$SCRIPT" start </dev/null 2>&1)
     local rc=$?
-    assert_exit_ok $rc || return 1
-    wait_for_daemon || return 1
-    fix_whisper_config
-
-    assert_file_exists "$WORKDIR/config.ini" || return 1
-    assert_file_exists "$WORKDIR/.state" || return 1
-    assert_dir_exists "$WORKDIR/audio" || return 1
-    assert_dir_exists "$WORKDIR/transcripts" || return 1
-    assert_dir_exists "$WORKDIR/logs" || return 1
+    assert_exit_error $rc || return 1
+    assert_contains "$output" "not initialized" || return 1
+    assert_file_missing "$WORKDIR/.state" || return 1
+    assert_file_missing "$WORKDIR/config.ini" || return 1
 }
 
 # T02: Daemon starts — PID file exists and process is alive
 test_02_daemon_starts() {
+    prepare_env
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     local rc=$?
     assert_exit_ok $rc || return 1
     wait_for_daemon || return 1
-    fix_whisper_config
 
     assert_file_exists "$WORKDIR/redictum.pid" || return 1
     local pid
@@ -232,9 +261,9 @@ test_02_daemon_starts() {
 
 # T03: Status shows running + PID
 test_03_status_running() {
+    prepare_env
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     wait_for_daemon || return 1
-    fix_whisper_config
     local pid
     pid=$(read_pid)
 
@@ -246,9 +275,9 @@ test_03_status_running() {
 
 # T04: Double start — second start fails with "already running"
 test_04_double_start() {
+    prepare_env
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     wait_for_daemon || return 1
-    fix_whisper_config
 
     local output
     output=$(python3 "$SCRIPT" start </dev/null 2>&1)
@@ -259,9 +288,9 @@ test_04_double_start() {
 
 # T05: Stop daemon — PID file removed, process dead
 test_05_stop_daemon() {
+    prepare_env
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     wait_for_daemon || return 1
-    fix_whisper_config
     local pid
     pid=$(read_pid)
 
@@ -282,13 +311,13 @@ test_06_status_not_running() {
 
 # T07: Stale PID file — start cleans it up and launches normally
 test_07_stale_pid() {
+    prepare_env
     echo "99999" > "$WORKDIR/redictum.pid"
 
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     local rc=$?
     assert_exit_ok $rc || return 1
     wait_for_daemon || return 1
-    fix_whisper_config
 
     local pid
     pid=$(read_pid)
@@ -299,42 +328,30 @@ test_07_stale_pid() {
     assert_pid_alive "$pid" || return 1
 }
 
-# T08: --config resets config.ini (fresh mtime)
-test_08_config_reset() {
-    # First start to create initial files
+# T08: --config + start refuses (--config deletes .state, daemon requires init)
+test_08_config_start_refuses() {
+    prepare_env
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     wait_for_daemon || return 1
-    fix_whisper_config
     local pid
     pid=$(read_pid)
 
     python3 "$SCRIPT" stop </dev/null >/dev/null 2>&1
     wait_for_pid_gone "$pid" || return 1
 
-    local old_mtime
-    old_mtime=$(stat -c %Y "$WORKDIR/config.ini")
-    sleep 1.1  # ensure different mtime (1-second resolution)
-
-    # --config deletes config.ini + .state, then start recreates them
-    python3 "$SCRIPT" --config start </dev/null >/dev/null 2>&1
+    # --config deletes .state + config.ini → start must refuse
+    local output
+    output=$(python3 "$SCRIPT" --config start </dev/null 2>&1)
     local rc=$?
-    assert_exit_ok $rc || return 1
-    wait_for_daemon || return 1
-    fix_whisper_config
-
-    local new_mtime
-    new_mtime=$(stat -c %Y "$WORKDIR/config.ini")
-    if [[ "$new_mtime" -le "$old_mtime" ]]; then
-        echo -e "  ${RED}FAIL${NC}: config.ini not recreated (mtime unchanged)"
-        return 1
-    fi
+    assert_exit_error $rc || return 1
+    assert_contains "$output" "not initialized" || return 1
 }
 
 # T09: Restart cycle — stop then start, PID alive
 test_09_restart_cycle() {
+    prepare_env
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     wait_for_daemon || return 1
-    fix_whisper_config
     local pid1
     pid1=$(read_pid)
 
@@ -351,9 +368,9 @@ test_09_restart_cycle() {
 
 # T10: SIGTERM graceful shutdown — process exits, PID file cleaned by atexit
 test_10_sigterm_graceful() {
+    prepare_env
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     wait_for_daemon || return 1
-    fix_whisper_config
     local pid
     pid=$(read_pid)
 
@@ -365,10 +382,9 @@ test_10_sigterm_graceful() {
 
 # T11: --set overrides config values at runtime (no sed needed)
 test_11_set_overrides() {
-    # First run to create config and .state
+    prepare_env
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     wait_for_daemon || return 1
-    fix_whisper_config
     local pid
     pid=$(read_pid)
     python3 "$SCRIPT" stop </dev/null >/dev/null 2>&1
@@ -392,10 +408,9 @@ test_11_set_overrides() {
 
 # T12: --set with unknown key exits with error
 test_12_set_invalid_key() {
-    # Need .state so it doesn't trigger first-run flow
+    prepare_env
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     wait_for_daemon || return 1
-    fix_whisper_config
     local pid
     pid=$(read_pid)
     python3 "$SCRIPT" stop </dev/null >/dev/null 2>&1
@@ -410,9 +425,9 @@ test_12_set_invalid_key() {
 
 # T13: --set with bad format (no =) exits with error
 test_13_set_bad_format() {
+    prepare_env
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
     wait_for_daemon || return 1
-    fix_whisper_config
     local pid
     pid=$(read_pid)
     python3 "$SCRIPT" stop </dev/null >/dev/null 2>&1
@@ -445,14 +460,14 @@ fi
 trap 'cleanup_test 2>/dev/null; kill $XVFB_PID 2>/dev/null' EXIT
 
 # Run all tests
-run_test "T01 Clean first run"      test_01_clean_first_run
+run_test "T01 Start refuses w/o init" test_01_start_refuses_without_init
 run_test "T02 Daemon starts"        test_02_daemon_starts
 run_test "T03 Status (running)"     test_03_status_running
 run_test "T04 Double start"         test_04_double_start
 run_test "T05 Stop daemon"          test_05_stop_daemon
 run_test "T06 Status (not running)" test_06_status_not_running
 run_test "T07 Stale PID"            test_07_stale_pid
-run_test "T08 Config reset"         test_08_config_reset
+run_test "T08 --config start refuses" test_08_config_start_refuses
 run_test "T09 Restart cycle"        test_09_restart_cycle
 run_test "T10 SIGTERM graceful"     test_10_sigterm_graceful
 run_test "T11 --set overrides"      test_11_set_overrides

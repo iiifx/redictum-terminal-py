@@ -411,3 +411,49 @@ class TestCheckOptionalMismatch:
             "clipboard": {"paste_auto": False},
         }
         assert app._check_optional_mismatch(config) is False
+
+
+class TestRunStartNotInitialized:
+    """run_start() refuses to start daemon when not initialized."""
+
+    def test_raises_when_not_initialized(self, app):
+        """Daemon must refuse if .state has no initialized_at."""
+        from redictum import RedictumError
+
+        with pytest.raises(RedictumError, match="not initialized"):
+            app.run_start()
+
+    def test_raises_when_state_file_missing(self, app, tmp_path):
+        """Daemon must refuse if .state file does not exist at all."""
+        from redictum import RedictumError
+
+        assert not (tmp_path / ".state").exists()
+        with pytest.raises(RedictumError, match="not initialized"):
+            app.run_start()
+
+    def test_no_state_file_created(self, app, tmp_path):
+        """run_start() must not create .state when refusing."""
+        from redictum import RedictumError
+
+        with pytest.raises(RedictumError):
+            app.run_start()
+        assert not (tmp_path / ".state").exists()
+
+    def test_initialized_app_does_not_raise(self, app, tmp_path, monkeypatch):
+        """run_start() proceeds past the guard when initialized."""
+        import json
+
+        # Mark as initialized
+        (tmp_path / ".state").write_text(
+            json.dumps({"initialized_at": "2024-01-15T12:34:56"})
+        )
+        # It will fail later (no config, no deps) but must NOT raise
+        # "not initialized" error
+        from redictum import RedictumError
+
+        try:
+            app.run_start()
+        except RedictumError as exc:
+            assert "not initialized" not in str(exc).lower()
+        except BaseException:
+            pass  # SystemExit from Daemon.start(), other errors — fine
