@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   skip — prevents garbage RMS values on files with extra metadata chunks
 - GPU detection: verify actual GPU backend via test transcription instead of only
   checking ldd — eliminates false "CUDA active" when GPU is linked but not working
+- Remove quotes from whisper language prompts — model was hallucinating
+  guillemets/brackets around transcribed text
 - E2E tests: place fake whisper-cli and model at default config paths so first-run
   init passes without interactive prompts
 
