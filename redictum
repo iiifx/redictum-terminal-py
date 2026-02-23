@@ -2405,6 +2405,7 @@ class SoundNotifier:
         self._volume = max(0, min(100, volume))
         self._temp_dir: Path | None = None
         self._sounds: dict[str, Path] = {}
+        self._init_lock = threading.Lock()
         self._warned_no_paplay = False
 
     def play_start(self) -> None:
@@ -2431,12 +2432,15 @@ class SoundNotifier:
     # -- internals -----------------------------------------------------------
 
     def _ensure_tones(self) -> None:
-        """Generate and cache all WAV tones on first use."""
+        """Generate and cache all WAV tones on first use (thread-safe)."""
         if self._sounds:
             return
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="redictum_"))
-        for name, samples in _generate_tones().items():
-            self._sounds[name] = self._write_wav(f"{name}.wav", samples)
+        with self._init_lock:
+            if self._sounds:
+                return
+            self._temp_dir = Path(tempfile.mkdtemp(prefix="redictum_"))
+            for name, samples in _generate_tones().items():
+                self._sounds[name] = self._write_wav(f"{name}.wav", samples)
 
     def _play(self, name: str) -> None:
         self._ensure_tones()
@@ -3225,8 +3229,16 @@ class RedictumApp:
         )
 
         # State machine
+        # Threading model: all pipeline components above are created here (main
+        # thread) and treated as read-only by _on_hold/_on_release/_run_pipeline
+        # callbacks which run in pynput and daemon threads.  Only _state and
+        # _current_mode are mutated concurrently — always under _state_lock.
+        # The state machine (IDLE → RECORDING → PROCESSING → IDLE) ensures
+        # that recorder.start() and recorder.stop() never overlap.
         self._state = STATE_IDLE
         self._state_lock = threading.Lock()
+        self._pipeline_done = threading.Event()
+        self._pipeline_done.set()  # no pipeline running initially
         self._current_mode = "transcribe"
 
         # Start listening
@@ -3264,6 +3276,7 @@ class RedictumApp:
                 return
             self._state = STATE_PROCESSING
             captured_mode = self._current_mode
+        self._pipeline_done.clear()
         thread = threading.Thread(
             target=self._run_pipeline, args=(captured_mode,), daemon=True,
         )
@@ -3348,6 +3361,7 @@ class RedictumApp:
         finally:
             with self._state_lock:
                 self._state = STATE_IDLE
+            self._pipeline_done.set()
 
     def _graceful_shutdown(self, listener: "HotkeyListener") -> None:
         """Stop listener and wait for any in-progress pipeline to finish."""
@@ -3361,12 +3375,7 @@ class RedictumApp:
             logging.info("Cancelled recording during shutdown")
         elif current == STATE_PROCESSING:
             logging.info("Waiting for processing to finish...")
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                with self._state_lock:
-                    if self._state == STATE_IDLE:
-                        break
-                time.sleep(0.5)
+            self._pipeline_done.wait(timeout=30)
         logging.info("Main loop stopped")
 
 

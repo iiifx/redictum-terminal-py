@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 - Daemon mode (`start`) no longer runs interactive setup when not initialized —
   prints error and exits instead of hanging on prompts with `stdin=/dev/null`
+- `StateManager.save()` is now atomic (tmpfile + rename) — prevents `.state`
+  corruption if process is killed during write
+- Fix `SoundNotifier._ensure_tones()` race condition: concurrent threads could
+  create duplicate temp dirs and corrupt the tone cache
+- Replace busy-loop polling in `_graceful_shutdown()` with `threading.Event` for
+  instant pipeline completion detection
 - E2E tests: place fake whisper-cli and model at default config paths so first-run
   init passes without interactive prompts
 

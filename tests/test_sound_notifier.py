@@ -2,6 +2,54 @@
 from __future__ import annotations
 
 import struct
+import threading
+
+import pytest
+
+
+class TestEnsureTonesThreadSafety:
+    """SoundNotifier._ensure_tones: thread-safe lazy initialization."""
+
+    def test_concurrent_ensure_creates_single_temp_dir(self, tmp_path, monkeypatch):
+        """Multiple threads calling _ensure_tones must create exactly one temp dir."""
+        from redictum import SoundNotifier
+
+        tones_dir = tmp_path / "tones"
+        tones_dir.mkdir()
+
+        monkeypatch.setattr(
+            "tempfile.mkdtemp",
+            lambda prefix="": str(tones_dir),
+        )
+
+        notifier = SoundNotifier(volume=30)
+        barrier = threading.Barrier(4)
+        errors = []
+
+        def worker():
+            try:
+                barrier.wait(timeout=5)
+                notifier._ensure_tones()
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors
+        # _sounds must be populated (all 4 tones)
+        assert len(notifier._sounds) == 4
+
+    def test_init_lock_exists(self):
+        """SoundNotifier must have _init_lock for thread-safe initialization."""
+        from redictum import SoundNotifier
+
+        notifier = SoundNotifier(volume=30)
+        assert hasattr(notifier, "_init_lock")
+        assert isinstance(notifier._init_lock, type(threading.Lock()))
 
 
 class TestWriteWav:
