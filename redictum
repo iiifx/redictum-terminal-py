@@ -555,13 +555,23 @@ class StateManager:
         return data
 
     def save(self, state: dict) -> None:
-        """Write state dict to disk as formatted JSON."""
+        """Write state dict to disk as formatted JSON (atomic via rename)."""
         import json
+        import tempfile
 
-        self._path.write_text(
-            json.dumps(state, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        data = json.dumps(state, indent=2, ensure_ascii=False) + "\n"
+        fd, tmp = tempfile.mkstemp(dir=self._path.parent, suffix=".tmp")
+        try:
+            os.write(fd, data.encode("utf-8"))
+            os.close(fd)
+            os.rename(tmp, str(self._path))
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
     def get(self, key: str, default: Any = None) -> Any:
         """Load state and return a single key."""

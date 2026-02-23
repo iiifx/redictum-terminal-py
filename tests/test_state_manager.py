@@ -73,6 +73,37 @@ class TestSave:
         mgr.save(data)
         assert mgr.load() == data
 
+    def test_no_temp_files_left_after_save(self, mgr, tmp_path):
+        mgr.save({"a": 1})
+        tmp_files = list(tmp_path.glob("*.tmp"))
+        assert tmp_files == []
+
+    def test_old_state_preserved_on_write_error(self, mgr, monkeypatch):
+        """If os.write fails, the original file must remain intact."""
+        mgr.save({"original": True})
+
+        def failing_write(fd, data):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("os.write", failing_write)
+        with pytest.raises(OSError, match="disk full"):
+            mgr.save({"corrupted": True})
+
+        # Original data must survive
+        assert mgr.load() == {"original": True}
+
+    def test_no_temp_files_left_on_error(self, mgr, tmp_path, monkeypatch):
+        """Temp file must be cleaned up on write failure."""
+        def failing_write(fd, data):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("os.write", failing_write)
+        with pytest.raises(OSError):
+            mgr.save({"x": 1})
+
+        tmp_files = list(tmp_path.glob("*.tmp"))
+        assert tmp_files == []
+
 
 class TestGetSet:
     """StateManager.get / set convenience methods."""
