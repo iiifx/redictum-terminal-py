@@ -2018,8 +2018,23 @@ class AudioProcessor:
             True if RMS is above threshold (likely contains speech).
         """
         with open(audio_path, "rb") as f:
-            f.seek(44)  # skip WAV header
-            data = f.read()
+            # Validate RIFF/WAVE header
+            riff = f.read(12)
+            if len(riff) < 12 or riff[:4] != b"RIFF" or riff[8:12] != b"WAVE":
+                logging.warning("Not a valid WAV file: %s", audio_path)
+                return False
+            # Scan chunks until "data" is found
+            data = b""
+            while True:
+                chunk_hdr = f.read(8)
+                if len(chunk_hdr) < 8:
+                    break
+                chunk_id = chunk_hdr[:4]
+                chunk_size = struct.unpack("<I", chunk_hdr[4:8])[0]
+                if chunk_id == b"data":
+                    data = f.read(chunk_size)
+                    break
+                f.seek(chunk_size, 1)  # skip non-data chunk
         if len(data) < 2:
             return False
         samples = struct.unpack(f"<{len(data) // 2}h", data)

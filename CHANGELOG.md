@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   create duplicate temp dirs and corrupt the tone cache
 - Replace busy-loop polling in `_graceful_shutdown()` with `threading.Event` for
   instant pipeline completion detection
+- `has_speech()` now parses WAV chunks properly instead of hardcoding 44-byte header
+  skip — prevents garbage RMS values on files with extra metadata chunks
 - E2E tests: place fake whisper-cli and model at default config paths so first-run
   init passes without interactive prompts
 
