@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
 from collections import namedtuple
 from pathlib import Path
@@ -547,3 +548,216 @@ class TestEnsureBuildTools:
         installer = WhisperInstaller(mgr)
         with pytest.raises(RedictumError, match="Build tools"):
             installer._ensure_build_tools()
+
+
+class TestClonePreservesModels:
+    """WhisperInstaller._clone: preserves models/ across re-clone."""
+
+    @pytest.fixture()
+    def installer(self, tmp_path):
+        from redictum import WhisperInstaller, ConfigManager
+
+        mgr = ConfigManager(tmp_path)
+        inst = WhisperInstaller(mgr)
+        inst._install_dir = tmp_path / "whisper.cpp"
+        return inst
+
+    def _fake_subprocess(self, install_dir):
+        """Return a subprocess.run replacement that creates the expected dir."""
+        version = "1.8.3"  # matches WHISPER_VERSION.lstrip("v")
+
+        def _run(cmd, **kw):
+            # On "tar" call, create the extracted directory
+            if cmd and "tar" in str(cmd[0]):
+                extracted = install_dir.parent / f"whisper.cpp-{version}"
+                extracted.mkdir(parents=True, exist_ok=True)
+            return MagicMock(returncode=0)
+
+        return _run
+
+    def test_models_preserved_on_reclone(self, installer, tmp_path, monkeypatch):
+        """Existing model files survive _clone()."""
+        install = installer._install_dir
+        models = install / "models"
+        models.mkdir(parents=True)
+        (models / "ggml-large.bin").write_bytes(b"FAKEMODEL")
+        (models / "ggml-small.bin").write_bytes(b"SMALLMODEL")
+
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        monkeypatch.setattr("subprocess.run", self._fake_subprocess(install))
+
+        installer._clone()
+
+        restored = install / "models"
+        assert restored.is_dir()
+        assert (restored / "ggml-large.bin").read_bytes() == b"FAKEMODEL"
+        assert (restored / "ggml-small.bin").read_bytes() == b"SMALLMODEL"
+
+    def test_no_backup_left_after_success(self, installer, tmp_path, monkeypatch):
+        """Backup directory is cleaned up after successful clone."""
+        install = installer._install_dir
+        models = install / "models"
+        models.mkdir(parents=True)
+        (models / "ggml-large.bin").write_bytes(b"DATA")
+
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        monkeypatch.setattr("subprocess.run", self._fake_subprocess(install))
+
+        installer._clone()
+
+        backup = install.parent / ".whisper_models_backup"
+        assert not backup.exists()
+
+    def test_fresh_clone_no_models(self, installer, tmp_path, monkeypatch):
+        """Clone without existing models works fine."""
+        install = installer._install_dir
+        install.mkdir(parents=True)
+        # No models dir at all
+
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        monkeypatch.setattr("subprocess.run", self._fake_subprocess(install))
+
+        installer._clone()
+        assert install.is_dir()
+
+    def test_leftover_backup_recovered(self, installer, tmp_path, monkeypatch):
+        """Leftover backup from a failed previous clone is restored."""
+        install = installer._install_dir
+        # Simulate failed previous run: backup exists, install dir is gone
+        backup = install.parent / ".whisper_models_backup"
+        backup.mkdir(parents=True)
+        (backup / "ggml-large.bin").write_bytes(b"RESCUED")
+
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        monkeypatch.setattr("subprocess.run", self._fake_subprocess(install))
+
+        installer._clone()
+
+        restored = install / "models"
+        assert restored.is_dir()
+        assert (restored / "ggml-large.bin").read_bytes() == b"RESCUED"
+        assert not backup.exists()
+
+
+class TestProbeGpuBackend:
+    """WhisperInstaller._probe_gpu_backend: detect actual GPU backend."""
+
+    @pytest.fixture()
+    def installer(self, tmp_path):
+        from redictum import WhisperInstaller, ConfigManager
+
+        mgr = ConfigManager(tmp_path)
+        return WhisperInstaller(mgr)
+
+    def _make_fake_run(self, stderr_text):
+        """Return a fake subprocess.run that produces given stderr."""
+        def fake_run(cmd, **kwargs):
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = ""
+            r.stderr = stderr_text
+            return r
+        return fake_run
+
+    def test_detects_cuda(self, installer, tmp_path, monkeypatch):
+        stderr = (
+            "whisper_init_with_params_no_state: use gpu    = 1\n"
+            "ggml_cuda_init: found 1 CUDA devices:\n"
+            "  Device 0: NVIDIA GeForce RTX 4070, compute capability 8.9\n"
+            "whisper_backend_init_gpu: using CUDA0 backend\n"
+        )
+        monkeypatch.setattr("subprocess.run", self._make_fake_run(stderr))
+        cli = tmp_path / "whisper-cli"
+        model = tmp_path / "model.bin"
+        cli.write_text("x")
+        model.write_text("x")
+        assert installer._probe_gpu_backend(cli, model) == "cuda"
+
+    def test_detects_metal(self, installer, tmp_path, monkeypatch):
+        stderr = "ggml_metal_init: loading default library\n"
+        monkeypatch.setattr("subprocess.run", self._make_fake_run(stderr))
+        cli = tmp_path / "whisper-cli"
+        model = tmp_path / "model.bin"
+        cli.write_text("x")
+        model.write_text("x")
+        assert installer._probe_gpu_backend(cli, model) == "metal"
+
+    def test_detects_vulkan(self, installer, tmp_path, monkeypatch):
+        stderr = "ggml_vulkan: device initialized\n"
+        monkeypatch.setattr("subprocess.run", self._make_fake_run(stderr))
+        cli = tmp_path / "whisper-cli"
+        model = tmp_path / "model.bin"
+        cli.write_text("x")
+        model.write_text("x")
+        assert installer._probe_gpu_backend(cli, model) == "vulkan"
+
+    def test_detects_cpu_fallback(self, installer, tmp_path, monkeypatch):
+        stderr = (
+            "whisper_init_with_params_no_state: use gpu    = 0\n"
+            "whisper_model_load: loading model\n"
+            "system_info: n_threads = 4\n"
+        )
+        monkeypatch.setattr("subprocess.run", self._make_fake_run(stderr))
+        cli = tmp_path / "whisper-cli"
+        model = tmp_path / "model.bin"
+        cli.write_text("x")
+        model.write_text("x")
+        assert installer._probe_gpu_backend(cli, model) == "cpu"
+
+    def test_timeout_returns_cpu(self, installer, tmp_path, monkeypatch):
+        def timeout_run(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, 30)
+        monkeypatch.setattr("subprocess.run", timeout_run)
+        cli = tmp_path / "whisper-cli"
+        model = tmp_path / "model.bin"
+        cli.write_text("x")
+        model.write_text("x")
+        assert installer._probe_gpu_backend(cli, model) == "cpu"
+
+    def test_probe_wav_cleaned_up(self, installer, tmp_path, monkeypatch):
+        """Probe WAV file must be removed after the check."""
+        created_files = []
+        original_mkstemp = __import__("tempfile").mkstemp
+
+        def tracking_mkstemp(**kwargs):
+            fd, path = original_mkstemp(**kwargs)
+            created_files.append(path)
+            return fd, path
+
+        monkeypatch.setattr("tempfile.mkstemp", tracking_mkstemp)
+        monkeypatch.setattr("subprocess.run", self._make_fake_run("cpu only\n"))
+        cli = tmp_path / "whisper-cli"
+        model = tmp_path / "model.bin"
+        cli.write_text("x")
+        model.write_text("x")
+        installer._probe_gpu_backend(cli, model)
+        for f in created_files:
+            assert not Path(f).exists(), f"Temp file not cleaned up: {f}"
+
+
+class TestMakeProbeWav:
+    """WhisperInstaller._make_probe_wav: generates valid silent WAV."""
+
+    def test_creates_valid_wav(self):
+        import struct
+        from redictum import WhisperInstaller
+
+        path = WhisperInstaller._make_probe_wav()
+        try:
+            data = path.read_bytes()
+            assert data[:4] == b"RIFF"
+            assert data[8:12] == b"WAVE"
+            # 0.5s at 16kHz mono 16-bit = 16000 bytes PCM
+            data_size = struct.unpack("<I", data[40:44])[0]
+            assert data_size == 16000
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_file_is_temporary(self):
+        from redictum import WhisperInstaller
+
+        path = WhisperInstaller._make_probe_wav()
+        assert path.exists()
+        assert path.suffix == ".wav"
+        assert "redictum_probe_" in path.name
+        path.unlink()

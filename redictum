@@ -1133,23 +1133,54 @@ class WhisperInstaller:
 
         # Offer CUDA rebuild if beneficial
         need_rebuild = False
+        rebuild_cuda = False
         if not cuda_linked:
             cuda_ok = self._ensure_cuda()
             if cuda_ok:
                 _rprint("  [yellow]\u26a0[/yellow] CUDA ready but whisper.cpp built without it")
                 if _confirm("  Rebuild with CUDA for GPU acceleration?", default=True):
                     need_rebuild = True
+                    rebuild_cuda = True
+
+        # General rebuild option
+        if not need_rebuild:
+            if _confirm("  Rebuild whisper.cpp?", default=False):
+                need_rebuild = True
+                cuda_ok = self._ensure_cuda()
+                if cuda_ok:
+                    rebuild_cuda = _confirm(
+                        "  Build with CUDA?", default=cuda_linked,
+                    )
 
         if need_rebuild:
             self._clone()
-            self._build(use_cuda=True)
+            self._build(use_cuda=rebuild_cuda)
             cli_path = self._install_dir / "build" / "bin" / "whisper-cli"
+            cuda_linked = rebuild_cuda
 
         model_path = self._ensure_model()
+
+        # Verify GPU is actually used, not just linked
+        if cuda_linked:
+            _rprint("  Verifying GPU backend...")
+            backend = self._probe_gpu_backend(cli_path, model_path)
+            if backend == "cuda":
+                _rprint("  [green]\u2713[/green] GPU acceleration [bold]active[/bold]")
+            elif backend in ("metal", "vulkan"):
+                _rprint(f"  [green]\u2713[/green] GPU acceleration [bold]active[/bold] ({backend})")
+            else:
+                _rprint(
+                    "  [yellow]\u26a0[/yellow] CUDA linked but GPU not active "
+                    "\u2014 transcription will use CPU"
+                )
+                logging.warning(
+                    "CUDA linked but GPU backend not detected in probe"
+                )
+
         self._update_config(cli_path, model_path)
 
         if need_rebuild:
-            self._record_build_type(cuda=True)
+            self._record_build_type(cuda=rebuild_cuda)
             _rprint("\n[green]whisper.cpp reconfigured![/green]")
         else:
             self._record_build_type(cuda=cuda_linked)
@@ -1178,6 +1209,60 @@ class WhisperInstaller:
             return "cuda" in output or "cublas" in output
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
+
+    def _probe_gpu_backend(self, cli_path: Path, model_path: Path) -> str:
+        """Run a tiny transcription and detect actual GPU backend from stderr.
+
+        Returns:
+            Detected backend: ``"cuda"``, ``"metal"``, ``"vulkan"``, or ``"cpu"``.
+        """
+        probe_wav = self._make_probe_wav()
+        try:
+            result = subprocess.run(
+                [str(cli_path), "-m", str(model_path), "-f", str(probe_wav),
+                 "--no-timestamps"],
+                capture_output=True, text=True, timeout=30,
+            )
+            stderr = result.stderr.lower()
+            logging.info("GPU probe stderr (first 500 chars): %s",
+                         result.stderr[:500])
+            if "ggml_cuda_init" in stderr and "found" in stderr:
+                return "cuda"
+            if "ggml_metal_init" in stderr:
+                return "metal"
+            if "vulkan" in stderr:
+                return "vulkan"
+            return "cpu"
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            logging.warning("GPU probe failed: %s", exc)
+            return "cpu"
+        finally:
+            probe_wav.unlink(missing_ok=True)
+
+    @staticmethod
+    def _make_probe_wav() -> Path:
+        """Generate a minimal 0.5-second silent WAV for GPU probing."""
+        sr = 16000
+        n = sr // 2
+        pcm = b"\x00\x00" * n
+        header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF", 36 + len(pcm), b"WAVE",
+            b"fmt ", 16, 1, 1, sr, sr * 2, 2, 16,
+            b"data", len(pcm),
+        )
+        fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="redictum_probe_")
+        try:
+            os.write(fd, header + pcm)
+            os.close(fd)
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            Path(tmp).unlink(missing_ok=True)
+            raise
+        return Path(tmp)
 
     def _get_nvcc_version(self) -> int | None:
         """Return major CUDA version from nvcc, or None."""
@@ -1335,7 +1420,24 @@ class WhisperInstaller:
         tarball = Path(tarball_path)
         os.close(fd)
 
+        # Preserve models directory across re-clone (same filesystem = instant)
+        models_dir = self._install_dir / "models"
+        saved_models = self._install_dir.parent / ".whisper_models_backup"
+        models_saved = False
+
         try:
+            # Save models or pick up leftover backup from a previous failed run
+            if models_dir.is_dir() and any(models_dir.iterdir()):
+                if saved_models.exists():
+                    shutil.rmtree(saved_models)
+                models_dir.rename(saved_models)
+                models_saved = True
+                logging.info("Whisper: models preserved (%d files)",
+                             len(list(saved_models.iterdir())))
+            elif saved_models.is_dir() and any(saved_models.iterdir()):
+                models_saved = True
+                logging.info("Whisper: recovered leftover model backup")
+
             if self._install_dir.exists():
                 _rprint(f"  Removing old {self._install_dir}...")
                 shutil.rmtree(self._install_dir)
@@ -1368,6 +1470,16 @@ class WhisperInstaller:
                 raise RedictumError(
                     f"Expected directory {extracted} not found after extraction"
                 )
+
+            # Restore models
+            if models_saved and saved_models.exists():
+                target = self._install_dir / "models"
+                if target.exists():
+                    shutil.rmtree(target)
+                saved_models.rename(target)
+                _rprint("  [green]\u2713[/green] Models preserved")
+                logging.info("Whisper: models restored")
+                models_saved = False
 
             _rprint(f"  [green]\u2713[/green] whisper.cpp {self.WHISPER_VERSION} ready")
         finally:
@@ -1541,7 +1653,8 @@ class WhisperInstaller:
         model_path_str = config.get("dependency", {}).get("whisper_model", "")
         if model_path_str and Path(model_path_str).exists():
             _rprint(f"  [green]\u2713[/green] Model: {Path(model_path_str).name}")
-            return Path(model_path_str)
+            if not _confirm("  Change model?", default=False):
+                return Path(model_path_str)
 
         # Look for existing models in the models directory
         existing = self._find_existing_models()

@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - Runtime state file (`.state`): replaces `.initialized` marker with persistent JSON state
   (version tracking, build metadata, UI state)
+- `whisper` command: "Rebuild whisper.cpp?" option — rebuild with or without CUDA at any time
+- `whisper` command: "Change model?" option — switch model without reinstalling
+- `whisper` command: models are preserved across rebuilds (backup + restore)
 
 ### Fixed
 - Daemon mode (`start`) no longer runs interactive setup when not initialized —
@@ -22,10 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   instant pipeline completion detection
 - `has_speech()` now parses WAV chunks properly instead of hardcoding 44-byte header
   skip — prevents garbage RMS values on files with extra metadata chunks
+- GPU detection: verify actual GPU backend via test transcription instead of only
+  checking ldd — eliminates false "CUDA active" when GPU is linked but not working
 - E2E tests: place fake whisper-cli and model at default config paths so first-run
   init passes without interactive prompts
 
 ### Changed
+- `whisper` wizard: reorder steps — build decisions before model selection and GPU probe
 - Rename `docker/` → `e2e/` to reflect the directory's purpose (E2E test infrastructure)
 
 ## [1.2.1] - 2026-02-22
