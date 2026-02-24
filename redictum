@@ -302,30 +302,13 @@ class ConfigManager:
     If an old ``config.yaml`` is detected, it is migrated automatically.
     """
 
-    # Types that should be parsed from INI string values.
-    _BOOL_KEYS: frozenset[str] = frozenset({
-        "recording_normalize",
-        "recording_silence_detection",
-        "recording_volume_reduce",
-        "paste_auto",
-        "sound_signal_start",
-        "sound_signal_processing",
-        "sound_signal_done",
-        "sound_signal_error",
-    })
-    _INT_KEYS: frozenset[str] = frozenset({
-        "whisper_timeout",
-        "sound_signal_volume",
-        "audio_max_files",
-        "transcripts_max_files",
-        "logs_max_files",
-        "recording_silence_threshold",
-        "recording_volume_level",
-    })
-    _FLOAT_KEYS: frozenset[str] = frozenset({
-        "hotkey_hold_delay",
-        "paste_restore_delay",
-    })
+    # Auto-inferred types from DEFAULT_CONFIG values.
+    _KEY_TYPES: dict[str, type] = {
+        key: type(val)
+        for section in DEFAULT_CONFIG.values()
+        if isinstance(section, dict)
+        for key, val in section.items()
+    }
 
     def __init__(self, script_dir: Path) -> None:
         self._path = script_dir / "config.ini"
@@ -558,7 +541,8 @@ class ConfigManager:
     def _parse_value(cls, key: str, raw: str) -> Any:
         """Parse a raw INI string value into the appropriate Python type."""
         value = cls._strip_quotes(raw)
-        if key in cls._BOOL_KEYS:
+        expected = cls._KEY_TYPES.get(key, str)
+        if expected is bool:
             lower = value.lower()
             if lower in ("true", "yes", "1", "on"):
                 return True
@@ -567,14 +551,14 @@ class ConfigManager:
             raise RedictumError(
                 f"Config '{key}': expected boolean (true/false), got '{value}'"
             )
-        if key in cls._INT_KEYS:
+        if expected is int:
             try:
                 return int(value)
             except ValueError as exc:
                 raise RedictumError(
                     f"Config '{key}': expected integer, got '{value}'"
                 ) from exc
-        if key in cls._FLOAT_KEYS:
+        if expected is float:
             try:
                 return float(value)
             except ValueError as exc:
