@@ -554,11 +554,23 @@ test_16_update_user_declines_eof() {
 }
 
 # T17: Quiet first-run — creates config and state with defaults, minimal output
+# After init succeeds the script enters the main loop (HotkeyListener), so we
+# run it in the background and kill it once .state appears.
 test_17_quiet_first_run() {
-    local output
-    output=$(python3 "$SCRIPT" -q </dev/null 2>&1)
-    local rc=$?
-    assert_exit_ok $rc || return 1
+    python3 "$SCRIPT" -q </dev/null >/dev/null 2>&1 &
+    local bg_pid=$!
+    local i=0
+    while [[ ! -f "$WORKDIR/.state" ]]; do
+        sleep 0.3
+        ((i++))
+        if [[ $i -ge 30 ]]; then
+            kill "$bg_pid" 2>/dev/null
+            echo -e "  ${RED}FAIL${NC}: .state not created within 9s"
+            return 1
+        fi
+    done
+    kill "$bg_pid" 2>/dev/null
+    wait "$bg_pid" 2>/dev/null
     assert_file_exists "$WORKDIR/config.ini" || return 1
     assert_file_exists "$WORKDIR/.state" || return 1
 }
