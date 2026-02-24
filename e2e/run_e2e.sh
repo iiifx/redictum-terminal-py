@@ -534,7 +534,7 @@ test_15_update_daemon_running() {
 
     setup_fake_curl "99.0.0"
     local output
-    output=$(PATH="$WORKDIR/fake-curl-bin:$PATH" echo "y" | python3 "$SCRIPT" update 2>&1)
+    output=$(echo "y" | PATH="$WORKDIR/fake-curl-bin:$PATH" python3 "$SCRIPT" update 2>&1)
     local rc=$?
     cleanup_fake_curl
     assert_exit_error $rc || return 1

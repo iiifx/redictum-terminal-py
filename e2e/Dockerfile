@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     xvfb \
     procps \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir pynput rich
