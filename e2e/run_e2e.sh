@@ -2,7 +2,7 @@
 # =============================================================================
 # Redictum Terminal — E2E Test Suite (Docker)
 # =============================================================================
-# Runs 13 daemon lifecycle tests in a clean Docker container.
+# Runs 16 daemon lifecycle + update tests in a clean Docker container.
 # Usage: docker compose up --build --abort-on-container-exit
 # =============================================================================
 
@@ -441,6 +441,113 @@ test_13_set_bad_format() {
 }
 
 # =============================================================================
+# Update test helpers
+# =============================================================================
+
+# Extract VERSION from the script
+SCRIPT_VERSION=$(python3 -c "
+import sys; sys.path.insert(0, '$WORKDIR')
+exec(open('$SCRIPT').read().split('class ')[0])
+print(VERSION)
+" 2>/dev/null)
+
+# Create a fake curl that serves update-related URLs
+setup_fake_curl() {
+    local fake_version="$1"
+    local fake_curl_dir="$WORKDIR/fake-curl-bin"
+    mkdir -p "$fake_curl_dir"
+
+    # Build a fake script to serve as the "new version"
+    local fake_new_script="$WORKDIR/fake-new-redictum"
+    cp "$SCRIPT" "$fake_new_script"
+    local real_hash
+    real_hash=$(sha256sum "$fake_new_script" | awk '{print $1}')
+
+    cat > "$fake_curl_dir/curl" <<FAKECURL
+#!/usr/bin/env python3
+import sys, os, json, shutil
+
+args = sys.argv[1:]
+
+# Parse -o flag
+output_file = None
+url = None
+for i, a in enumerate(args):
+    if a == "-o" and i + 1 < len(args):
+        output_file = args[i + 1]
+    elif not a.startswith("-"):
+        url = a
+
+if url is None:
+    sys.exit(1)
+
+if "releases/latest" in url:
+    print(json.dumps({"tag_name": "v${fake_version}"}))
+    sys.exit(0)
+
+if url.endswith(".sha256"):
+    if output_file:
+        with open(output_file, "w") as f:
+            f.write("${real_hash}  redictum\\n")
+    else:
+        print("${real_hash}  redictum")
+    sys.exit(0)
+
+if "/redictum" in url and not url.endswith(".sha256"):
+    if output_file:
+        shutil.copy("${fake_new_script}", output_file)
+    sys.exit(0)
+
+# Fallback: call real curl
+os.execvp("/usr/bin/curl", ["/usr/bin/curl"] + args)
+FAKECURL
+    chmod +x "$fake_curl_dir/curl"
+}
+
+cleanup_fake_curl() {
+    rm -rf "$WORKDIR/fake-curl-bin" "$WORKDIR/fake-new-redictum"
+}
+
+# T14: Update — already up to date
+test_14_update_already_up_to_date() {
+    prepare_env
+    setup_fake_curl "$SCRIPT_VERSION"
+    local output
+    output=$(PATH="$WORKDIR/fake-curl-bin:$PATH" python3 "$SCRIPT" update </dev/null 2>&1)
+    local rc=$?
+    cleanup_fake_curl
+    assert_exit_ok $rc || return 1
+    assert_contains "$output" "up to date" || return 1
+}
+
+# T15: Update — daemon is running
+test_15_update_daemon_running() {
+    prepare_env
+    python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
+    wait_for_daemon || return 1
+
+    setup_fake_curl "99.0.0"
+    local output
+    output=$(PATH="$WORKDIR/fake-curl-bin:$PATH" echo "y" | python3 "$SCRIPT" update 2>&1)
+    local rc=$?
+    cleanup_fake_curl
+    assert_exit_error $rc || return 1
+    assert_contains "$output" "stop" || return 1
+}
+
+# T16: Update — user declines (EOF)
+test_16_update_user_declines_eof() {
+    prepare_env
+    setup_fake_curl "99.0.0"
+    local output
+    output=$(PATH="$WORKDIR/fake-curl-bin:$PATH" python3 "$SCRIPT" update </dev/null 2>&1)
+    local rc=$?
+    cleanup_fake_curl
+    assert_exit_ok $rc || return 1
+    assert_contains "$output" "99.0.0" || return 1
+}
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -473,6 +580,9 @@ run_test "T10 SIGTERM graceful"     test_10_sigterm_graceful
 run_test "T11 --set overrides"      test_11_set_overrides
 run_test "T12 --set invalid key"    test_12_set_invalid_key
 run_test "T13 --set bad format"     test_13_set_bad_format
+run_test "T14 Update: up to date"  test_14_update_already_up_to_date
+run_test "T15 Update: daemon running" test_15_update_daemon_running
+run_test "T16 Update: EOF decline" test_16_update_user_declines_eof
 
 # Summary
 echo -e "\n${BOLD}==============================${NC}"

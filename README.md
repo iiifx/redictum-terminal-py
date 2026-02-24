@@ -71,6 +71,7 @@ On first run, the script will:
 ~/redictum/redictum setup      # re-run optional dependency setup
 ~/redictum/redictum whisper    # install/reconfigure whisper.cpp
 ~/redictum/redictum language   # change transcription language
+~/redictum/redictum update     # check for updates and update in-place
 ```
 
 ## License

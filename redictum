@@ -15,6 +15,7 @@ import os
 import platform
 import re
 import signal
+import hashlib
 import shutil
 import struct
 import subprocess
@@ -32,7 +33,7 @@ try:
 except ImportError:
     _console = None
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -44,6 +45,12 @@ STATE_PROCESSING = "processing"
 PID_FILENAME = "redictum.pid"
 STATE_FILENAME = ".state"
 STOP_TIMEOUT = 3.0
+
+GITHUB_REPO = "iiifx/redictum-terminal-py"
+GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RELEASE_BASE = f"https://github.com/{GITHUB_REPO}/releases/download"
+UPDATE_API_TIMEOUT = 10
+UPDATE_DL_TIMEOUT = 60
 
 PATH_KEYS: tuple[tuple[str, ...], ...] = (
     ("dependency", "whisper_cli"),
@@ -245,6 +252,13 @@ def _confirm(prompt: str, default: bool = False) -> bool:
         result = answer in ("y", "yes")
     logging.info("Prompt: %r → %s", prompt, "yes" if result else "no")
     return result
+
+
+def _compare_versions(a: str, b: str) -> int:
+    """Compare semver strings. Return -1 if a < b, 0 if equal, 1 if a > b."""
+    ta = tuple(int(x) for x in a.split("."))
+    tb = tuple(int(x) for x in b.split("."))
+    return (ta > tb) - (ta < tb)
 
 
 # ---------------------------------------------------------------------------
@@ -3278,6 +3292,140 @@ class RedictumApp:
         _rprint("[green]Language settings saved.[/green]")
         return EXIT_OK
 
+    # -- Self-update ----------------------------------------------------------
+
+    def _fetch_latest_version(self) -> str:
+        """Query GitHub Releases API for the latest version tag.
+
+        Returns:
+            Version string without leading ``v`` (e.g. ``1.4.0``).
+
+        Raises:
+            RedictumError: On network/parse failure.
+        """
+        timeout = UPDATE_API_TIMEOUT
+        if shutil.which("curl"):
+            cmd = ["curl", "-fsSL", "-m", str(timeout), GITHUB_API_LATEST]
+        elif shutil.which("wget"):
+            cmd = ["wget", "-q", "-O", "-", f"--timeout={timeout}", GITHUB_API_LATEST]
+        else:
+            raise RedictumError("Neither curl nor wget found. Cannot check for updates.")
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=timeout + 5,
+            )
+        except subprocess.TimeoutExpired:
+            raise RedictumError("Timed out checking for updates. Try again later.")
+
+        if result.returncode != 0:
+            raise RedictumError(
+                f"Failed to check for updates (exit {result.returncode}). "
+                "Check your internet connection."
+            )
+
+        import json as _json
+        try:
+            data = _json.loads(result.stdout)
+            tag = data["tag_name"]
+        except (ValueError, KeyError):
+            raise RedictumError("Unexpected response from GitHub API.")
+
+        return tag.lstrip("v")
+
+    def _download_to_file(self, url: str, dest: Path, timeout: int) -> None:
+        """Download *url* to *dest* file using curl or wget.
+
+        Raises:
+            RedictumError: On download failure.
+        """
+        dest_str = str(dest)
+        if shutil.which("curl"):
+            cmd = ["curl", "-fsSL", "-m", str(timeout), "-o", dest_str, url]
+        elif shutil.which("wget"):
+            cmd = ["wget", "-q", "-O", dest_str, f"--timeout={timeout}", url]
+        else:
+            raise RedictumError("Neither curl nor wget found. Cannot download update.")
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=timeout + 5,
+            )
+        except subprocess.TimeoutExpired:
+            raise RedictumError("Download timed out. Try again later.")
+
+        if result.returncode != 0 or not dest.exists():
+            raise RedictumError(f"Failed to download {url}")
+
+    def run_update(self) -> int:
+        """Check for updates and replace the script in-place.
+
+        Returns:
+            Exit code.
+        """
+        _rprint(f"  Current version: [cyan]{VERSION}[/cyan]")
+        _rprint("  Checking for updates...")
+
+        try:
+            latest = self._fetch_latest_version()
+        except RedictumError:
+            raise
+
+        cmp = _compare_versions(VERSION, latest)
+        if cmp >= 0:
+            _rprint("  Already up to date.")
+            return EXIT_OK
+
+        _rprint(f"  New version available: [green]{latest}[/green]")
+        if not _confirm("  Update?", default=True):
+            return EXIT_OK
+
+        # Check daemon
+        daemon = Daemon(self._pid_path, self._log_path)
+        if daemon.status() is not None:
+            _rprint("[red]  Daemon is running. Stop it first: ./redictum stop[/red]")
+            return EXIT_ERROR
+
+        tag = f"v{latest}"
+        hash_url = f"{GITHUB_RELEASE_BASE}/{tag}/redictum.sha256"
+        script_url = f"{GITHUB_RELEASE_BASE}/{tag}/redictum"
+
+        tmp_hash_fd, tmp_hash_path = tempfile.mkstemp(prefix="redictum_hash_")
+        tmp_script_fd, tmp_script_path = tempfile.mkstemp(prefix="redictum_update_")
+        os.close(tmp_hash_fd)
+        os.close(tmp_script_fd)
+        tmp_hash = Path(tmp_hash_path)
+        tmp_script = Path(tmp_script_path)
+
+        try:
+            _rprint("  Downloading...")
+            self._download_to_file(hash_url, tmp_hash, UPDATE_DL_TIMEOUT)
+            expected_hash = tmp_hash.read_text().strip().split()[0]
+
+            self._download_to_file(script_url, tmp_script, UPDATE_DL_TIMEOUT)
+
+            _rprint("  Verifying checksum...")
+            actual_hash = hashlib.sha256(tmp_script.read_bytes()).hexdigest()
+            if actual_hash != expected_hash:
+                _rprint("[red]  Checksum mismatch — download may be corrupted. Aborting.[/red]")
+                return EXIT_ERROR
+
+            # Backup and replace
+            script_path = Path(__file__).resolve()
+            backup_path = script_path.with_suffix(".bak")
+            shutil.copy2(str(script_path), str(backup_path))
+            shutil.copy2(str(tmp_script), str(script_path))
+            os.chmod(str(script_path), 0o755)
+
+            _rprint(f"  [green]Updated: {VERSION} → {latest}[/green]")
+            _rprint(f"  Backup saved: {backup_path}")
+            return EXIT_OK
+        finally:
+            tmp_hash.unlink(missing_ok=True)
+            tmp_script.unlink(missing_ok=True)
+
     def _first_run_language_check(self, config: dict[str, Any]) -> None:
         """Offer to change language during first run.
 
@@ -3620,6 +3768,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("setup", help="Re-run optional dependency setup")
     sub.add_parser("whisper", help="Setup whisper.cpp (install, check, reconfigure)")
     sub.add_parser("language", help="Change transcription language")
+    sub.add_parser("update", help="Update to the latest version")
 
     return parser
 
@@ -3659,6 +3808,8 @@ def main() -> int:
             return app.run_whisper()
         if args.command == "language":
             return app.run_language()
+        if args.command == "update":
+            return app.run_update()
     except RedictumError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_ERROR
