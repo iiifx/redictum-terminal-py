@@ -76,6 +76,6 @@ On first run, the script will:
 
 ## License
 
-[MIT](LICENSE) — Vitaliy Khomenko, [Mojam](https://mojam.co)
+[MIT](LICENSE) — Vitaliy Khomenko, [Mojam.co](https://mojam.co)
 
 Built with [Claude](https://claude.ai) by Anthropic.
