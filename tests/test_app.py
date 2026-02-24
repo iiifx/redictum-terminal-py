@@ -49,6 +49,9 @@ class TestDepsOk:
         # shutil.which returns a path for all known tools
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
 
+        # Mock _collect_missing_deps to isolate _deps_ok from environment
+        monkeypatch.setattr(app, "_collect_missing_deps", lambda config: [])
+
         # whisper cli and model exist
         cli = tmp_path / "whisper-cli"
         model = tmp_path / "model.bin"
