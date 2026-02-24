@@ -1253,8 +1253,7 @@ class WhisperInstaller:
                 capture_output=True, text=True, timeout=30,
             )
             stderr = result.stderr.lower()
-            logging.info("GPU probe stderr (first 500 chars): %s",
-                         result.stderr[:500])
+            logging.info("GPU probe stderr:\n%s", result.stderr)
             if "ggml_cuda_init" in stderr and "found" in stderr:
                 return "cuda"
             if "ggml_metal_init" in stderr:
@@ -1581,8 +1580,10 @@ class WhisperInstaller:
                 _rprint("  Retrying with CPU-only...")
                 self._build(use_cuda=False)
                 return
+            logging.error("cmake configure stderr:\n%s", result.stderr)
+            logging.error("cmake configure stdout:\n%s", result.stdout)
             raise RedictumError(
-                f"cmake configure failed:\n{result.stderr[:500]}"
+                f"cmake configure failed:\n{result.stderr.strip()[-500:]}"
             )
         _rprint(f"  [green]\u2713[/green] Configured ({mode})")
 
@@ -2150,9 +2151,11 @@ class AudioProcessor:
         except subprocess.TimeoutExpired as exc:
             raise RedictumError("ffmpeg normalization timed out") from exc
         if result.returncode != 0:
+            stderr_text = result.stderr.decode(errors='replace')
+            logging.error("ffmpeg normalization stderr:\n%s", stderr_text)
             raise RedictumError(
                 f"ffmpeg normalization failed (code {result.returncode}): "
-                f"{result.stderr.decode(errors='replace')[:200]}"
+                f"{stderr_text.strip()[-500:]}"
             )
         _rprint(f"  Normalize: {input_path.name} → {output_path.name}", level=1)
         logging.info(
@@ -2431,9 +2434,11 @@ class Transcriber:
             ) from exc
 
         if result.returncode != 0:
+            logging.error("whisper-cli stderr:\n%s", result.stderr)
+            logging.error("whisper-cli stdout:\n%s", result.stdout)
             raise RedictumError(
                 f"whisper-cli failed (code {result.returncode}): "
-                f"{result.stderr[:200]}"
+                f"{result.stderr.strip()[-500:]}"
             )
 
         text = result.stdout.strip()

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Truncated stderr in error messages now shows last 500 chars (tail) instead of first 200 (head),
+  capturing the actual root cause (e.g. CUDA errors) instead of generic prefixes
+- Full stderr/stdout is now logged on failure for whisper-cli, ffmpeg, and cmake —
+  previously lost due to truncation
+
 ## [1.5.0] - 2026-02-24
 
 ### Added
