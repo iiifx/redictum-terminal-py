@@ -46,6 +46,8 @@ PID_FILENAME = "redictum.pid"
 STATE_FILENAME = ".state"
 STOP_TIMEOUT = 3.0
 
+_verbosity = 0  # -1 = quiet, 0 = normal, 1 = verbose
+
 GITHUB_REPO = "iiifx/redictum-terminal-py"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASE_BASE = f"https://github.com/{GITHUB_REPO}/releases/download"
@@ -225,8 +227,18 @@ class RedictumError(Exception):
     """Base exception for Redictum Terminal errors."""
 
 
-def _rprint(text: str) -> None:
-    """Print with rich markup if available, plain print otherwise."""
+def _rprint(text: str, level: int = 0) -> None:
+    """Print with rich markup if available, plain print otherwise.
+
+    Args:
+        text: Text to print (may contain rich markup).
+        level: Output level.  ``0`` = normal (suppressed in quiet),
+            ``1`` = verbose-only, ``-1`` = critical (always shown).
+    """
+    if _verbosity < 0 and level == 0:
+        return
+    if level > 0 and _verbosity < level:
+        return
     if _console is not None:
         _console.print(text)
     else:
@@ -237,8 +249,11 @@ def _confirm(prompt: str, default: bool = False) -> bool:
     """Ask the user y/n via input(). Return *default* on empty Enter.
 
     The hint ``[Y/n]`` or ``[y/N]`` is appended automatically.
-    Return False on EOF/Ctrl+C.
+    Return False on EOF/Ctrl+C.  In quiet mode returns *default* immediately.
     """
+    if _verbosity < 0:
+        logging.info("Prompt: %r → %s (quiet auto-default)", prompt, "yes" if default else "no")
+        return default
     hint = "[Y/n]" if default else "[y/N]"
     try:
         answer = input(f"{prompt} {hint}: ").strip().lower()
@@ -1600,6 +1615,11 @@ class WhisperInstaller:
 
     def _select_and_download(self) -> Path:
         """Let the user pick a model and download it."""
+        if _verbosity < 0:
+            # Quiet mode: pick recommended (first) model
+            _name, filename, _desc = self.MODELS[0]
+            return self._download_model(filename)
+
         _rprint("\n  [bold]Available models:[/bold]")
         for i, (name, _filename, desc) in enumerate(self.MODELS, 1):
             marker = " [bold](recommended)[/bold]" if i == 1 else ""
@@ -1676,6 +1696,12 @@ class WhisperInstaller:
             return self._select_and_download()
 
         # Offer to pick an existing model or download new
+        if _verbosity < 0:
+            # Quiet mode: pick first existing model
+            selected = existing[0][0]
+            _rprint(f"  [green]\u2713[/green] Using model: {selected.name}")
+            return selected
+
         _rprint("\n  [bold]Found installed models:[/bold]")
         for i, (path, size_mb) in enumerate(existing, 1):
             _rprint(f"    {i}. {path.name} ({size_mb})")
@@ -1750,11 +1776,11 @@ class WhisperInstaller:
         _rprint("  [green]\u2713[/green] Config updated")
 
 
-def setup_logging(log_path: Path, *, force: bool = False) -> None:
+def setup_logging(log_path: Path, *, force: bool = False, verbose: bool = False) -> None:
     """Configure file-based logging. Called at daemon and interactive startup."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[logging.FileHandler(log_path, encoding="utf-8")],
@@ -1952,7 +1978,7 @@ class Daemon:
         os.close(log_fd)
 
         # Re-init logging in forked child (clears parent handlers)
-        setup_logging(self._log_path, force=True)
+        setup_logging(self._log_path, force=True, verbose=(_verbosity > 0))
 
         # Write PID file and register cleanup
         self._write_pid()
@@ -2128,6 +2154,7 @@ class AudioProcessor:
                 f"ffmpeg normalization failed (code {result.returncode}): "
                 f"{result.stderr.decode(errors='replace')[:200]}"
             )
+        _rprint(f"  Normalize: {input_path.name} → {output_path.name}", level=1)
         logging.info(
             "Audio normalized: %s -> %s", input_path.name, output_path.name
         )
@@ -2166,6 +2193,7 @@ class AudioProcessor:
             return False
         samples = struct.unpack(f"<{len(data) // 2}h", data)
         rms = (sum(s * s for s in samples) / len(samples)) ** 0.5
+        _rprint(f"  RMS: {rms:.0f}, threshold: {threshold:.0f}", level=1)
         logging.info("Audio RMS: %.1f (threshold: %.1f)", rms, threshold)
         return rms > threshold
 
@@ -2384,10 +2412,12 @@ class Transcriber:
             if prompt:
                 cmd.extend(["--prompt", prompt])
 
+        _rprint(f"  Whisper cmd: {' '.join(cmd)}", level=1)
         logging.info(
             "Transcribing: %s (translate: %s)", audio_path.name, translate,
         )
 
+        t0 = time.monotonic()
         try:
             result = subprocess.run(
                 cmd,
@@ -2407,6 +2437,8 @@ class Transcriber:
             )
 
         text = result.stdout.strip()
+        elapsed = time.monotonic() - t0
+        _rprint(f"  Whisper: {len(text)} chars in {elapsed:.1f}s", level=1)
         # Filter blank audio artifacts
         if not text or text in self.BLANK_MARKERS:
             logging.info("Whisper returned blank/empty output")
@@ -2484,6 +2516,7 @@ class ClipboardManager:
             if result.returncode != 0 or not result.stdout:
                 logging.warning("Clipboard save failed: xclip returned %d", result.returncode)
                 return None
+            _rprint(f"  Clipboard saved: {target}, {len(result.stdout)} bytes", level=1)
             return (target, result.stdout)
         except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
             logging.warning("Clipboard save failed: %s", exc)
@@ -2504,6 +2537,7 @@ class ClipboardManager:
                 stderr=subprocess.DEVNULL,
                 timeout=5,
             )
+            _rprint(f"  Clipboard restored: {target}", level=1)
         except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
             logging.warning("Clipboard restore failed: %s", exc)
 
@@ -3104,7 +3138,7 @@ class RedictumApp:
         Returns:
             Exit code.
         """
-        setup_logging(self._log_path)
+        setup_logging(self._log_path, verbose=(_verbosity > 0))
         _log_system_info()
 
         first_run = not self._is_initialized()
@@ -3154,7 +3188,7 @@ class RedictumApp:
         Returns:
             Exit code.
         """
-        setup_logging(self._log_path)
+        setup_logging(self._log_path, verbose=(_verbosity > 0))
         _log_system_info()
 
         if not self._is_initialized():
@@ -3219,7 +3253,7 @@ class RedictumApp:
             Exit code.
         """
         self._log_path = self._make_log_path("setup")
-        setup_logging(self._log_path)
+        setup_logging(self._log_path, verbose=(_verbosity > 0))
         logging.info("Subcommand: setup")
         self._config = self._load_config()
         self._dir_mgr.ensure()
@@ -3238,7 +3272,7 @@ class RedictumApp:
             Exit code.
         """
         self._log_path = self._make_log_path("whisper")
-        setup_logging(self._log_path)
+        setup_logging(self._log_path, verbose=(_verbosity > 0))
         logging.info("Subcommand: whisper")
         self._config = self._load_config()
         self._dir_mgr.ensure()
@@ -3254,9 +3288,19 @@ class RedictumApp:
             Exit code.
         """
         self._log_path = self._make_log_path("language")
-        setup_logging(self._log_path)
+        setup_logging(self._log_path, verbose=(_verbosity > 0))
         logging.info("Subcommand: language")
         self._config = self._load_config()
+
+        if _verbosity < 0:
+            # Quiet mode: set auto without wizard
+            self._config_mgr.update({
+                "whisper_language": "auto",
+                "whisper_prompt": "auto",
+            })
+            logging.info("Language set to auto (quiet mode)")
+            return EXIT_OK
+
         detected = _show_language_status(self._config)
 
         if not _confirm("Change language?", default=True):
@@ -3303,6 +3347,7 @@ class RedictumApp:
         Raises:
             RedictumError: On network/parse failure.
         """
+        _rprint(f"  Update: checking {GITHUB_API_LATEST}", level=1)
         timeout = UPDATE_API_TIMEOUT
         if shutil.which("curl"):
             cmd = ["curl", "-fsSL", "-m", str(timeout), GITHUB_API_LATEST]
@@ -3340,6 +3385,7 @@ class RedictumApp:
         Raises:
             RedictumError: On download failure.
         """
+        _rprint(f"  Download: {url}", level=1)
         dest_str = str(dest)
         if shutil.which("curl"):
             cmd = ["curl", "-fsSL", "-m", str(timeout), "-o", dest_str, url]
@@ -3408,6 +3454,7 @@ class RedictumApp:
 
             _rprint("  Verifying checksum...")
             actual_hash = hashlib.sha256(tmp_script.read_bytes()).hexdigest()
+            _rprint(f"  Checksum OK: {actual_hash[:16]}...", level=1)
             if actual_hash != expected_hash:
                 _rprint("[red]  Checksum mismatch — download may be corrupted. Aborting.[/red]")
                 return EXIT_ERROR
@@ -3483,6 +3530,13 @@ class RedictumApp:
             language = _detect_language()
             logging.info("Language auto-detected from locale: %r", language)
 
+        # Verbose config dump
+        if _verbosity > 0:
+            _rprint(f"  Config: language={language}", level=1)
+            _rprint(f"  Config: device={self._audio_cfg['recording_device']}", level=1)
+            _rprint(f"  Config: normalize={self._audio_cfg.get('recording_normalize', True)}", level=1)
+            _rprint(f"  Config: hotkey={cfg['input']['hotkey_key']}", level=1)
+
         # Build pipeline components
         self._recorder = AudioRecorder(audio_dir, self._audio_cfg["recording_device"])
         self._processor = AudioProcessor()
@@ -3543,6 +3597,7 @@ class RedictumApp:
             return
         if self._sound_cfg.get("sound_signal_start", True):
             self._notifier.play_start()
+        _rprint(f"  Recording: device={self._audio_cfg['recording_device']}", level=1)
         logging.info("Recording started (mode: %s)", mode)
 
     def _on_release(self, mode: str) -> None:
@@ -3569,6 +3624,8 @@ class RedictumApp:
                 if self._sound_cfg.get("sound_signal_error", True):
                     self._notifier.play_error()
                 return
+
+            _rprint(f"  Audio: {audio_path.name} ({audio_path.stat().st_size} bytes)", level=1)
 
             # Silence detection (before normalize — loudnorm amplifies noise)
             if self._audio_cfg.get("recording_silence_detection", True):
@@ -3760,6 +3817,17 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="section.key=value",
         help="Override a config value for this run (repeatable)",
     )
+    verbosity = parser.add_mutually_exclusive_group()
+    verbosity.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Verbose output (show diagnostics)",
+    )
+    verbosity.add_argument(
+        "-q", "--quiet",
+        action="store_true",
+        help="Quiet mode (suppress output, auto-answer with defaults)",
+    )
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("start", help="Start the daemon")
@@ -3781,6 +3849,12 @@ def main() -> int:
     """
     parser = build_parser()
     args = parser.parse_args()
+
+    global _verbosity
+    if args.quiet:
+        _verbosity = -1
+    elif args.verbose:
+        _verbosity = 1
 
     script_dir = Path(__file__).resolve().parent
     app = RedictumApp(script_dir, overrides=args.overrides)

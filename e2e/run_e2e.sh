@@ -2,7 +2,7 @@
 # =============================================================================
 # Redictum Terminal — E2E Test Suite (Docker)
 # =============================================================================
-# Runs 16 daemon lifecycle + update tests in a clean Docker container.
+# Runs 18 daemon lifecycle + update + verbosity tests in a clean Docker container.
 # Usage: docker compose up --build --abort-on-container-exit
 # =============================================================================
 
@@ -547,6 +547,35 @@ test_16_update_user_declines_eof() {
     assert_contains "$output" "99.0.0" || return 1
 }
 
+# T17: Quiet first-run — creates config and state with defaults, minimal output
+test_17_quiet_first_run() {
+    local output
+    output=$(python3 "$SCRIPT" -q </dev/null 2>&1)
+    local rc=$?
+    assert_exit_ok $rc || return 1
+    assert_file_exists "$WORKDIR/config.ini" || return 1
+    assert_file_exists "$WORKDIR/.state" || return 1
+}
+
+# T18: Quiet start/stop — daemon starts and stops with no output
+test_18_quiet_start_stop() {
+    prepare_env
+    python3 "$SCRIPT" -q start </dev/null >/dev/null 2>&1
+    local rc=$?
+    assert_exit_ok $rc || return 1
+    wait_for_daemon || return 1
+
+    python3 "$SCRIPT" -q stop </dev/null >/dev/null 2>&1
+    rc=$?
+    assert_exit_ok $rc || return 1
+    local pid
+    pid=$(read_pid 2>/dev/null)
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        echo -e "  ${RED}FAIL${NC}: daemon still running after quiet stop"
+        return 1
+    fi
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -583,6 +612,8 @@ run_test "T13 --set bad format"     test_13_set_bad_format
 run_test "T14 Update: up to date"  test_14_update_already_up_to_date
 run_test "T15 Update: daemon running" test_15_update_daemon_running
 run_test "T16 Update: EOF decline" test_16_update_user_declines_eof
+run_test "T17 Quiet first-run"   test_17_quiet_first_run
+run_test "T18 Quiet start/stop"  test_18_quiet_start_stop
 
 # Summary
 echo -e "\n${BOLD}==============================${NC}"
