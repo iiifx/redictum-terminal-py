@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Redictum Terminal — voice-to-text CLI for Linux.
 
-Author:  Vitaliy Khomenko (Mojam)
-AI:      Claude by Anthropic
+Author:  Vitaliy Khomenko, Mojam.co
 License: MIT
 """
 from __future__ import annotations
