@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- Deduplicate optional dependency checking: three methods (`_check_optional_sound`,
+  `_check_optional_normalize`, `_check_optional_paste`) replaced with a single generic
+  `_check_optional_dep` driven by declarative `_OptionalDep` dataclass
+- Extract `_display_language` / `_confirm_and_save_language` helpers to remove
+  duplicated language display+save code from `run_language` and `_first_run_language_check`
+- Extract `_rotate_dir` helper to deduplicate `rotate_audio`, `rotate_transcripts`,
+  `rotate_logs`
+- Extract `_record_run_timestamp` and `_fix_optional_mismatch` helpers to deduplicate
+  shared blocks in `run_interactive` and `run_start`
+
 ## [1.6.0] - 2026-02-24
 
 ### Added

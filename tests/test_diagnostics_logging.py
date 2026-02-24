@@ -372,7 +372,8 @@ class TestRunOptional:
         )
         monkeypatch.setattr("builtins.input", lambda _: "n")
         with caplog.at_level(logging.INFO):
-            diag._check_optional_sound()
+            from redictum import _OPTIONAL_DEPS
+            diag._check_optional_dep(_OPTIONAL_DEPS[0])  # paplay
         assert config["notification"]["sound_signal_start"] is False
         assert config["notification"]["sound_signal_done"] is False
         assert config["notification"]["sound_signal_error"] is False
@@ -392,7 +393,8 @@ class TestRunOptional:
         )
         monkeypatch.setattr("builtins.input", lambda _: "n")
         with caplog.at_level(logging.INFO):
-            diag._check_optional_normalize()
+            from redictum import _OPTIONAL_DEPS
+            diag._check_optional_dep(_OPTIONAL_DEPS[1])  # ffmpeg
         assert config["audio"]["recording_normalize"] is False
         assert any("disabled" in r.message for r in caplog.records)
 
@@ -410,7 +412,8 @@ class TestRunOptional:
         )
         monkeypatch.setattr("builtins.input", lambda _: "n")
         with caplog.at_level(logging.INFO):
-            diag._check_optional_paste()
+            from redictum import _OPTIONAL_DEPS
+            diag._check_optional_dep(_OPTIONAL_DEPS[2])  # xdotool
         assert config["clipboard"]["paste_auto"] is False
         assert any("disabled" in r.message for r in caplog.records)
 
@@ -456,7 +459,8 @@ class TestRunOptionalForceReEnable:
         diag = make_diagnostics(config)
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
         with caplog.at_level(logging.INFO):
-            diag._check_optional_sound(force=True)
+            from redictum import _OPTIONAL_DEPS
+            diag._check_optional_dep(_OPTIONAL_DEPS[0], force=True)  # paplay
         assert config["notification"]["sound_signal_start"] is True
         assert config["notification"]["sound_signal_done"] is True
         assert config["notification"]["sound_signal_error"] is True
@@ -470,7 +474,8 @@ class TestRunOptionalForceReEnable:
         diag = make_diagnostics(config)
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
         with caplog.at_level(logging.INFO):
-            diag._check_optional_normalize(force=True)
+            from redictum import _OPTIONAL_DEPS
+            diag._check_optional_dep(_OPTIONAL_DEPS[1], force=True)  # ffmpeg
         assert config["audio"]["recording_normalize"] is True
 
     def test_force_reenables_paste(self, make_diagnostics, monkeypatch, caplog):
@@ -482,7 +487,8 @@ class TestRunOptionalForceReEnable:
         diag = make_diagnostics(config)
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
         with caplog.at_level(logging.INFO):
-            diag._check_optional_paste(force=True)
+            from redictum import _OPTIONAL_DEPS
+            diag._check_optional_dep(_OPTIONAL_DEPS[2], force=True)  # xdotool
         assert config["clipboard"]["paste_auto"] is True
 
     def test_force_decline_stays_disabled(self, make_diagnostics, monkeypatch, caplog):
@@ -495,7 +501,8 @@ class TestRunOptionalForceReEnable:
         monkeypatch.setattr("shutil.which", lambda x: None)
         monkeypatch.setattr("builtins.input", lambda _: "n")
         with caplog.at_level(logging.INFO):
-            diag._check_optional_normalize(force=True)
+            from redictum import _OPTIONAL_DEPS
+            diag._check_optional_dep(_OPTIONAL_DEPS[1], force=True)  # ffmpeg
         assert config["audio"]["recording_normalize"] is False
 
 

@@ -23,6 +23,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -715,6 +716,45 @@ class StateManager:
 # Stubs
 # ---------------------------------------------------------------------------
 
+
+@dataclass(frozen=True)
+class _OptionalDep:
+    """Descriptor for an optional dependency checked during setup."""
+
+    tool: str                       # binary name (shutil.which)
+    package: str                    # apt package name
+    label: str                      # human-readable feature name
+    section: str                    # config section name
+    guard_keys: tuple[str, ...]     # keys for config-guard check
+    enable_keys: dict[str, bool]    # keys to set on force-enable
+    disable_keys: dict[str, bool]   # keys to set on disable
+
+
+_OPTIONAL_DEPS: list[_OptionalDep] = [
+    _OptionalDep(
+        "paplay", "pulseaudio-utils", "Sound notifications", "notification",
+        ("sound_signal_start", "sound_signal_processing",
+         "sound_signal_done", "sound_signal_error"),
+        {"sound_signal_start": True, "sound_signal_done": True,
+         "sound_signal_error": True},
+        {"sound_signal_start": False, "sound_signal_processing": False,
+         "sound_signal_done": False, "sound_signal_error": False},
+    ),
+    _OptionalDep(
+        "ffmpeg", "ffmpeg", "Audio normalization", "audio",
+        ("recording_normalize",),
+        {"recording_normalize": True},
+        {"recording_normalize": False},
+    ),
+    _OptionalDep(
+        "xdotool", "xdotool", "Auto-paste", "clipboard",
+        ("paste_auto",),
+        {"paste_auto": True},
+        {"paste_auto": False},
+    ),
+]
+
+
 class Diagnostics:
     """Check external dependencies and offer auto-installation.
 
@@ -1020,132 +1060,48 @@ class Diagnostics:
                    re-enable the feature in config.
         """
         _rprint("\n[bold]Optional features:[/bold]")
-        self._check_optional_sound(force=force)
-        self._check_optional_normalize(force=force)
-        self._check_optional_paste(force=force)
+        for dep in _OPTIONAL_DEPS:
+            self._check_optional_dep(dep, force=force)
 
-    def _check_optional_sound(self, force: bool = False) -> None:
-        """Check paplay: if missing, offer install or disable sound signals."""
-        # Config-guard: skip if all sound signals already disabled
+    def _apply_dep_config(self, section: str, keys: dict[str, bool]) -> None:
+        """Update config file and in-memory config for a dependency."""
+        self._config_mgr.update({k: str(v).lower() for k, v in keys.items()})
+        for key, value in keys.items():
+            self._config.setdefault(section, {})[key] = value
+
+    def _check_optional_dep(self, dep: _OptionalDep, force: bool = False) -> None:
+        """Check a single optional dependency, offer install or disable."""
+        # Config-guard: skip if all guard keys already disabled
         if not force:
-            notif = self._config.get("notification", {})
-            sound_keys = ("sound_signal_start", "sound_signal_processing",
-                          "sound_signal_done", "sound_signal_error")
-            if not any(notif.get(k, True) for k in sound_keys):
-                _rprint("  [dim]-[/dim] Sound notifications (disabled"
+            sect = self._config.get(dep.section, {})
+            if not any(sect.get(k, True) for k in dep.guard_keys):
+                _rprint(f"  [dim]-[/dim] {dep.label} (disabled"
                         " \u2014 run './redictum setup' to reconfigure)")
-                logging.info("Optional: sound signals — skipped (disabled in config)")
+                logging.info("Optional: %s — skipped (disabled in config)", dep.tool)
                 return
-        if shutil.which("paplay"):
-            _rprint("  [green]\u2713[/green] Sound notifications (paplay)")
-            logging.info("Optional: paplay — found")
+        if shutil.which(dep.tool):
+            _rprint(f"  [green]\u2713[/green] {dep.label} ({dep.tool})")
+            logging.info("Optional: %s — found", dep.tool)
             if force:
-                # Re-enable defaults when tool is present
-                updates = {
-                    "sound_signal_start": "true",
-                    "sound_signal_done": "true",
-                    "sound_signal_error": "true",
-                }
-                self._config_mgr.update(updates)
-                for key in ("sound_signal_start", "sound_signal_done",
-                             "sound_signal_error"):
-                    self._config.setdefault("notification", {})[key] = True
+                self._apply_dep_config(dep.section, dep.enable_keys)
             return
-        _rprint("  [yellow]\u26a0[/yellow] paplay not found — sound notifications unavailable")
-        logging.info("Optional: paplay — missing")
-        if _confirm("Install pulseaudio-utils (paplay) for sound notifications?", default=True):
-            if self._has_apt() and self._install_apt(["pulseaudio-utils"]):
-                _rprint("  [green]\u2713[/green] paplay installed")
-                logging.info("Optional: paplay — installed")
+        _rprint(f"  [yellow]\u26a0[/yellow] {dep.tool} not found"
+                f" — {dep.label.lower()} unavailable")
+        logging.info("Optional: %s — missing", dep.tool)
+        pkg_hint = (f"{dep.package} ({dep.tool})" if dep.package != dep.tool
+                    else dep.package)
+        if _confirm(f"Install {pkg_hint} for {dep.label.lower()}?",
+                    default=True):
+            if self._has_apt() and self._install_apt([dep.package]):
+                _rprint(f"  [green]\u2713[/green] {dep.tool} installed")
+                logging.info("Optional: %s — installed", dep.tool)
                 if force:
-                    updates = {
-                        "sound_signal_start": "true",
-                        "sound_signal_done": "true",
-                        "sound_signal_error": "true",
-                    }
-                    self._config_mgr.update(updates)
-                    for key in ("sound_signal_start", "sound_signal_done",
-                                 "sound_signal_error"):
-                        self._config.setdefault("notification", {})[key] = True
+                    self._apply_dep_config(dep.section, dep.enable_keys)
                 return
             _rprint("  [yellow]Installation failed.[/yellow]")
-        # Disable all sound signals in config
-        updates = {
-            "sound_signal_start": "false",
-            "sound_signal_processing": "false",
-            "sound_signal_done": "false",
-            "sound_signal_error": "false",
-        }
-        self._config_mgr.update(updates)
-        for key in ("sound_signal_start", "sound_signal_processing",
-                     "sound_signal_done", "sound_signal_error"):
-            self._config.setdefault("notification", {})[key] = False
-        _rprint("  [dim]Sound notifications disabled in config[/dim]")
-        logging.info("Optional: sound signals disabled in config")
-
-    def _check_optional_normalize(self, force: bool = False) -> None:
-        """Check ffmpeg: if missing, offer install or disable normalization."""
-        # Config-guard: skip if normalization already disabled
-        if not force:
-            if not self._config.get("audio", {}).get("recording_normalize", True):
-                _rprint("  [dim]-[/dim] Audio normalization (disabled"
-                        " \u2014 run './redictum setup' to reconfigure)")
-                logging.info("Optional: ffmpeg — skipped (disabled in config)")
-                return
-        if shutil.which("ffmpeg"):
-            _rprint("  [green]\u2713[/green] Audio normalization (ffmpeg)")
-            logging.info("Optional: ffmpeg — found")
-            if force:
-                self._config_mgr.update({"recording_normalize": "true"})
-                self._config.setdefault("audio", {})["recording_normalize"] = True
-            return
-        _rprint("  [yellow]\u26a0[/yellow] ffmpeg not found — audio normalization unavailable")
-        logging.info("Optional: ffmpeg — missing")
-        if _confirm("Install ffmpeg for audio normalization?", default=True):
-            if self._has_apt() and self._install_apt(["ffmpeg"]):
-                _rprint("  [green]\u2713[/green] ffmpeg installed")
-                logging.info("Optional: ffmpeg — installed")
-                if force:
-                    self._config_mgr.update({"recording_normalize": "true"})
-                    self._config.setdefault("audio", {})["recording_normalize"] = True
-                return
-            _rprint("  [yellow]Installation failed.[/yellow]")
-        self._config_mgr.update({"recording_normalize": "false"})
-        self._config.setdefault("audio", {})["recording_normalize"] = False
-        _rprint("  [dim]Audio normalization disabled in config[/dim]")
-        logging.info("Optional: recording_normalize disabled in config")
-
-    def _check_optional_paste(self, force: bool = False) -> None:
-        """Check xdotool: if missing, offer install or disable auto-paste."""
-        # Config-guard: skip if auto-paste already disabled
-        if not force:
-            if not self._config.get("clipboard", {}).get("paste_auto", True):
-                _rprint("  [dim]-[/dim] Auto-paste (disabled"
-                        " \u2014 run './redictum setup' to reconfigure)")
-                logging.info("Optional: xdotool — skipped (disabled in config)")
-                return
-        if shutil.which("xdotool"):
-            _rprint("  [green]\u2713[/green] Auto-paste (xdotool)")
-            logging.info("Optional: xdotool — found")
-            if force:
-                self._config_mgr.update({"paste_auto": "true"})
-                self._config.setdefault("clipboard", {})["paste_auto"] = True
-            return
-        _rprint("  [yellow]\u26a0[/yellow] xdotool not found — auto-paste unavailable")
-        logging.info("Optional: xdotool — missing")
-        if _confirm("Install xdotool for auto-paste?", default=True):
-            if self._has_apt() and self._install_apt(["xdotool"]):
-                _rprint("  [green]\u2713[/green] xdotool installed")
-                logging.info("Optional: xdotool — installed")
-                if force:
-                    self._config_mgr.update({"paste_auto": "true"})
-                    self._config.setdefault("clipboard", {})["paste_auto"] = True
-                return
-            _rprint("  [yellow]Installation failed.[/yellow]")
-        self._config_mgr.update({"paste_auto": "false"})
-        self._config.setdefault("clipboard", {})["paste_auto"] = False
-        _rprint("  [dim]Auto-paste disabled in config[/dim]")
-        logging.info("Optional: paste_auto disabled in config")
+        self._apply_dep_config(dep.section, dep.disable_keys)
+        _rprint(f"  [dim]{dep.label} disabled in config[/dim]")
+        logging.info("Optional: %s disabled in config", dep.tool)
 
     # -- whisper.cpp: warning only ------------------------------------------
 
@@ -3035,41 +2991,26 @@ class Housekeeping:
         self._transcripts_max = storage_cfg.get("transcripts_max_files", 50)
         self._logs_max = storage_cfg.get("logs_max_files", 50)
 
-    def rotate_audio(self) -> int:
-        """Remove oldest audio files exceeding the limit.
+    def _rotate_dir(self, directory: Path, pattern: str,
+                    max_files: int, label: str) -> int:
+        """Glob *pattern* in *directory*, sort by mtime, rotate excess."""
+        files = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime)
+        return self._rotate(files, max_files, label)
 
-        Returns:
-            Number of files removed.
-        """
-        wav_files = sorted(
-            self._audio_dir.glob("*.wav"),
-            key=lambda p: p.stat().st_mtime,
-        )
-        return self._rotate(wav_files, self._audio_max, "Audio")
+    def rotate_audio(self) -> int:
+        """Remove oldest audio files exceeding the limit."""
+        return self._rotate_dir(self._audio_dir, "*.wav",
+                                self._audio_max, "Audio")
 
     def rotate_transcripts(self) -> int:
-        """Remove oldest daily transcript files exceeding the limit.
-
-        Returns:
-            Number of files removed.
-        """
-        txt_files = sorted(
-            self._transcripts_dir.glob("*.txt"),
-            key=lambda p: p.stat().st_mtime,
-        )
-        return self._rotate(txt_files, self._transcripts_max, "Transcript")
+        """Remove oldest daily transcript files exceeding the limit."""
+        return self._rotate_dir(self._transcripts_dir, "*.txt",
+                                self._transcripts_max, "Transcript")
 
     def rotate_logs(self) -> int:
-        """Remove oldest session log files exceeding the limit.
-
-        Returns:
-            Number of files removed.
-        """
-        log_files = sorted(
-            self._logs_dir.glob("*.log"),
-            key=lambda p: p.stat().st_mtime,
-        )
-        return self._rotate(log_files, self._logs_max, "Log")
+        """Remove oldest session log files exceeding the limit."""
+        return self._rotate_dir(self._logs_dir, "*.log",
+                                self._logs_max, "Log")
 
     @staticmethod
     def _rotate(files: list[Path], max_files: int, label: str) -> int:
@@ -3298,6 +3239,20 @@ class RedictumApp:
                '      (default: auto)')
         self._state_mgr.set("config_hint_shown", True)
 
+    def _fix_optional_mismatch(self) -> None:
+        """Re-check optional deps if config says enabled but tool is gone."""
+        if self._check_optional_mismatch(self._config):
+            diag = Diagnostics(self._config, self._config_mgr, self._state_mgr)
+            diag.run_optional()
+            self._config = self._load_config()
+
+    def _record_run_timestamp(self) -> None:
+        """Persist last-run timestamp and version in state."""
+        state = self._state_mgr.load()
+        state["last_run"] = datetime.now().isoformat()
+        state["version"] = VERSION
+        self._state_mgr.save(state)
+
     def run_interactive(self) -> int:
         """Run in interactive (foreground) mode.
 
@@ -3311,11 +3266,7 @@ class RedictumApp:
         if not first_run:
             self._config = self.init_quick()
             if self._deps_ok(self._config):
-                # Detect optional deps that disappeared after setup
-                if self._check_optional_mismatch(self._config):
-                    diag = Diagnostics(self._config, self._config_mgr, self._state_mgr)
-                    diag.run_optional()
-                    self._config = self._load_config()
+                self._fix_optional_mismatch()
                 ready = False
             else:
                 self._config = self.init()
@@ -3328,10 +3279,7 @@ class RedictumApp:
             self._first_run_language_check(self._config)
             self._show_config_hint()
 
-        state = self._state_mgr.load()
-        state["last_run"] = datetime.now().isoformat()
-        state["version"] = VERSION
-        self._state_mgr.save(state)
+        self._record_run_timestamp()
 
         stop_event = threading.Event()
 
@@ -3365,18 +3313,11 @@ class RedictumApp:
 
         self._config = self.init_quick()
         if self._deps_ok(self._config):
-            # Detect optional deps that disappeared after setup
-            if self._check_optional_mismatch(self._config):
-                diag = Diagnostics(self._config, self._config_mgr, self._state_mgr)
-                diag.run_optional()
-                self._config = self._load_config()
+            self._fix_optional_mismatch()
         else:
             self._config = self.init()
 
-        state = self._state_mgr.load()
-        state["last_run"] = datetime.now().isoformat()
-        state["version"] = VERSION
-        self._state_mgr.save(state)
+        self._record_run_timestamp()
 
         daemon = Daemon(self._pid_path, self._log_path)
         _rprint("[bold]Redictum Terminal — daemon started.[/bold]")
@@ -3447,6 +3388,29 @@ class RedictumApp:
         logging.info("Whisper subcommand complete")
         return EXIT_OK
 
+    @staticmethod
+    def _display_language(lang: str, prompt: str) -> None:
+        """Print the chosen language settings."""
+        if lang == "auto":
+            _rprint("\n  whisper_language = [cyan]auto[/cyan]")
+            _rprint("  whisper_prompt   = [cyan]auto[/cyan]")
+        else:
+            lang_name = LANGUAGE_NAMES.get(lang, lang)
+            short = prompt[:60] + "..." if len(prompt) > 60 else prompt
+            _rprint(f"\n  whisper_language = [cyan]{lang}[/cyan] ({lang_name})")
+            _rprint(f"  whisper_prompt   = {short}")
+
+    def _confirm_and_save_language(self, lang: str, prompt: str) -> bool:
+        """Ask to save and persist language settings.  Return True if saved."""
+        if not _confirm("\nSave to config?", default=True):
+            return False
+        self._config_mgr.update({
+            "whisper_language": lang,
+            "whisper_prompt": prompt,
+        })
+        _rprint("[green]Language settings saved.[/green]")
+        return True
+
     def run_language(self) -> int:
         """Change transcription language via interactive wizard.
 
@@ -3477,29 +3441,17 @@ class RedictumApp:
             return EXIT_OK
 
         lang, prompt = result
-        if lang == "auto":
-            _rprint("\n  whisper_language = [cyan]auto[/cyan]")
-            _rprint("  whisper_prompt   = [cyan]auto[/cyan]")
-        else:
-            lang_name = LANGUAGE_NAMES.get(lang, lang)
-            short = prompt[:60] + "..." if len(prompt) > 60 else prompt
-            _rprint(f"\n  whisper_language = [cyan]{lang}[/cyan] ({lang_name})")
-            _rprint(f"  whisper_prompt   = {short}")
+        self._display_language(lang, prompt)
 
         # Check daemon
         daemon = Daemon(self._pid_path, self._log_path)
         if daemon.status() is not None:
             _rprint("\n[yellow]Daemon is running. Restart it for changes to take effect.[/yellow]")
 
-        if not _confirm("\nSave to config?", default=True):
+        if not self._confirm_and_save_language(lang, prompt):
             return EXIT_OK
 
-        self._config_mgr.update({
-            "whisper_language": lang,
-            "whisper_prompt": prompt,
-        })
         logging.info("Language saved: %s", lang)
-        _rprint("[green]Language settings saved.[/green]")
         return EXIT_OK
 
     # -- Self-update ----------------------------------------------------------
@@ -3660,23 +3612,8 @@ class RedictumApp:
             return
 
         lang, prompt = result
-        if lang == "auto":
-            _rprint("\n  whisper_language = [cyan]auto[/cyan]")
-            _rprint("  whisper_prompt   = [cyan]auto[/cyan]")
-        else:
-            lang_name = LANGUAGE_NAMES.get(lang, lang)
-            short = prompt[:60] + "..." if len(prompt) > 60 else prompt
-            _rprint(f"\n  whisper_language = [cyan]{lang}[/cyan] ({lang_name})")
-            _rprint(f"  whisper_prompt   = {short}")
-
-        if not _confirm("\nSave to config?", default=True):
-            return
-
-        self._config_mgr.update({
-            "whisper_language": lang,
-            "whisper_prompt": prompt,
-        })
-        _rprint("[green]Language settings saved.[/green]")
+        self._display_language(lang, prompt)
+        self._confirm_and_save_language(lang, prompt)
 
     def _main_loop(self, stop_event: threading.Event) -> None:
         """Main loop: push-to-talk → record → normalize → transcribe → paste."""
