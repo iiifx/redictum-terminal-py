@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `rotate_logs`
 - Extract `_record_run_timestamp` and `_fix_optional_mismatch` helpers to deduplicate
   shared blocks in `run_interactive` and `run_start`
+- Rename `--config` flag to `--reset-config` for clarity
 - Auto-infer config value types from `DEFAULT_CONFIG`: replace manual `_BOOL_KEYS`,
   `_INT_KEYS`, `_FLOAT_KEYS` frozensets with a single `_KEY_TYPES` dict derived
   automatically from default values — new config keys get correct type parsing

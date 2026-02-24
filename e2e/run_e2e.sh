@@ -334,7 +334,7 @@ test_07_stale_pid() {
     assert_pid_alive "$pid" || return 1
 }
 
-# T08: --config + start refuses (--config deletes .state, daemon requires init)
+# T08: --reset-config + start refuses (--reset-config deletes .state, daemon requires init)
 test_08_config_start_refuses() {
     prepare_env
     python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
@@ -345,9 +345,9 @@ test_08_config_start_refuses() {
     python3 "$SCRIPT" stop </dev/null >/dev/null 2>&1
     wait_for_pid_gone "$pid" || return 1
 
-    # --config deletes .state + config.ini → start must refuse
+    # --reset-config deletes .state + config.ini → start must refuse
     local output
-    output=$(python3 "$SCRIPT" --config start </dev/null 2>&1)
+    output=$(python3 "$SCRIPT" --reset-config start </dev/null 2>&1)
     local rc=$?
     assert_exit_error $rc || return 1
     assert_contains "$output" "not initialized" || return 1
@@ -621,7 +621,7 @@ run_test "T04 Double start"         test_04_double_start
 run_test "T05 Stop daemon"          test_05_stop_daemon
 run_test "T06 Status (not running)" test_06_status_not_running
 run_test "T07 Stale PID"            test_07_stale_pid
-run_test "T08 --config start refuses" test_08_config_start_refuses
+run_test "T08 --reset-config start refuses" test_08_config_start_refuses
 run_test "T09 Restart cycle"        test_09_restart_cycle
 run_test "T10 SIGTERM graceful"     test_10_sigterm_graceful
 run_test "T11 --set overrides"      test_11_set_overrides

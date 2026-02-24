@@ -3911,7 +3911,7 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"redictum {VERSION}",
     )
     parser.add_argument(
-        "--config",
+        "--reset-config",
         action="store_true",
         help="Recreate config.ini with default values",
     )
@@ -3964,7 +3964,7 @@ def main() -> int:
     script_dir = Path(__file__).resolve().parent
     app = RedictumApp(script_dir, overrides=args.overrides)
 
-    if args.config:
+    if args.reset_config:
         config_path = script_dir / "config.ini"
         if config_path.exists():
             config_path.unlink()

@@ -114,12 +114,12 @@ class TestBuildParser:
         args = parser.parse_args([])
         assert args.command is None
 
-    def test_config_flag(self):
+    def test_reset_config_flag(self):
         from redictum import build_parser
 
         parser = build_parser()
-        args = parser.parse_args(["--config"])
-        assert args.config is True
+        args = parser.parse_args(["--reset-config"])
+        assert args.reset_config is True
 
     def test_version_flag(self):
         from redictum import build_parser
