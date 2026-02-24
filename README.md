@@ -1,5 +1,7 @@
 # Redictum Terminal
 
+[![CI](https://github.com/iiifx/redictum-terminal-py/actions/workflows/ci.yml/badge.svg)](https://github.com/iiifx/redictum-terminal-py/actions/workflows/ci.yml)
+
 **Simple. All-in-one. Run. Hold. Talk. Enjoy!**
 
 Voice-to-text CLI for Linux. Uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for local speech recognition. No cloud APIs, everything runs on your machine.
