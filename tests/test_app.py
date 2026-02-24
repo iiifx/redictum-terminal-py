@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections import namedtuple
-from pathlib import Path
 
 import pytest
 
@@ -146,6 +145,7 @@ class TestInitAbort:
         """init() raises RedictumError when runtime deps are not satisfied."""
         import sys
         from unittest.mock import MagicMock
+
         from redictum import RedictumError
 
         monkeypatch.setattr(sys, "version_info", _VersionInfo(3, 12, 0, "final", 0))
@@ -173,7 +173,8 @@ class TestInitAbort:
     def test_init_aborts_before_whisper_when_core_missing(self, app, monkeypatch, tmp_path):
         """init() aborts after stage2 without asking about whisper."""
         import sys
-        from unittest.mock import MagicMock, call, patch
+        from unittest.mock import MagicMock, patch
+
         from redictum import RedictumError
 
         monkeypatch.setattr(sys, "version_info", _VersionInfo(3, 12, 0, "final", 0))
@@ -301,32 +302,32 @@ class TestApplyOverrides:
         assert config["dependency"]["whisper_timeout"] == 30
 
     def test_missing_equals_raises(self):
-        from redictum import _apply_overrides, RedictumError
+        from redictum import RedictumError, _apply_overrides
 
         with pytest.raises(RedictumError, match="Invalid --set format"):
             _apply_overrides({}, ["dependency.whisper_language"])
 
     def test_unknown_section_raises(self):
-        from redictum import _apply_overrides, RedictumError
+        from redictum import RedictumError, _apply_overrides
 
         with pytest.raises(RedictumError, match="Unknown section"):
             _apply_overrides({}, ["nonexistent.key=val"])
 
     def test_unknown_key_raises(self):
-        from redictum import _apply_overrides, RedictumError
+        from redictum import RedictumError, _apply_overrides
 
         with pytest.raises(RedictumError, match="Unknown key"):
             _apply_overrides({}, ["dependency.nonexistent_key=val"])
 
     def test_bad_int_raises(self):
-        from redictum import _apply_overrides, RedictumError
+        from redictum import RedictumError, _apply_overrides
 
         config = {"dependency": {"whisper_timeout": 120}}
         with pytest.raises(RedictumError, match="Invalid value"):
             _apply_overrides(config, ["dependency.whisper_timeout=abc"])
 
     def test_bad_float_raises(self):
-        from redictum import _apply_overrides, RedictumError
+        from redictum import RedictumError, _apply_overrides
 
         config = {"clipboard": {"paste_restore_delay": 0.3}}
         with pytest.raises(RedictumError, match="Invalid value"):

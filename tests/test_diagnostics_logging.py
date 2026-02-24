@@ -504,7 +504,8 @@ class TestSetupSubcommand:
 
     def test_setup_calls_force(self, tmp_path, monkeypatch):
         from unittest.mock import patch
-        from redictum import RedictumApp, EXIT_OK
+
+        from redictum import EXIT_OK, RedictumApp
 
         app = RedictumApp(tmp_path)
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
@@ -524,7 +525,7 @@ class TestEnsureBuildTools:
     """WhisperInstaller._ensure_build_tools: checks cmake/build-essential."""
 
     def test_all_present_no_prompt(self, tmp_path, monkeypatch):
-        from redictum import WhisperInstaller, ConfigManager
+        from redictum import ConfigManager, WhisperInstaller
 
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
         monkeypatch.setattr(
@@ -536,7 +537,7 @@ class TestEnsureBuildTools:
         installer._ensure_build_tools()  # should not raise
 
     def test_missing_declined_raises(self, tmp_path, monkeypatch):
-        from redictum import WhisperInstaller, ConfigManager, RedictumError
+        from redictum import ConfigManager, RedictumError, WhisperInstaller
 
         monkeypatch.setattr("shutil.which", lambda x: None)
         monkeypatch.setattr(
@@ -555,7 +556,7 @@ class TestClonePreservesModels:
 
     @pytest.fixture()
     def installer(self, tmp_path):
-        from redictum import WhisperInstaller, ConfigManager
+        from redictum import ConfigManager, WhisperInstaller
 
         mgr = ConfigManager(tmp_path)
         inst = WhisperInstaller(mgr)
@@ -644,7 +645,7 @@ class TestProbeGpuBackend:
 
     @pytest.fixture()
     def installer(self, tmp_path):
-        from redictum import WhisperInstaller, ConfigManager
+        from redictum import ConfigManager, WhisperInstaller
 
         mgr = ConfigManager(tmp_path)
         return WhisperInstaller(mgr)
@@ -740,6 +741,7 @@ class TestMakeProbeWav:
 
     def test_creates_valid_wav(self):
         import struct
+
         from redictum import WhisperInstaller
 
         path = WhisperInstaller._make_probe_wav()

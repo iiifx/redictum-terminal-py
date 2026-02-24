@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # _rprint: level filtering
@@ -121,6 +119,7 @@ class TestRunLanguageQuiet:
     @pytest.fixture()
     def app(self, tmp_path):
         import json
+
         from redictum import RedictumApp
         # Minimal init: config + state files
         (tmp_path / ".state").write_text(

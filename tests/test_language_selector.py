@@ -1,7 +1,7 @@
 """Tests for language selector wizard and related functions."""
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch
 
 import pytest
 
@@ -21,7 +21,7 @@ class TestLanguageWizard:
     """_language_wizard: interactive language selection."""
 
     def test_select_by_number_returns_code_and_prompt(self):
-        from redictum import _language_wizard, LANGUAGE_PROMPTS
+        from redictum import LANGUAGE_PROMPTS, _language_wizard
 
         with patch("builtins.input", return_value="8"):
             result = _language_wizard("ru")
@@ -32,7 +32,7 @@ class TestLanguageWizard:
         assert prompt == LANGUAGE_PROMPTS["ru"]
 
     def test_select_first_language(self):
-        from redictum import _language_wizard, LANGUAGE_PROMPTS
+        from redictum import LANGUAGE_PROMPTS, _language_wizard
 
         with patch("builtins.input", return_value="1"):
             result = _language_wizard("en")
@@ -40,7 +40,7 @@ class TestLanguageWizard:
         assert result == ("en", LANGUAGE_PROMPTS["en"])
 
     def test_select_last_language(self):
-        from redictum import _language_wizard, LANGUAGE_NAMES, LANGUAGE_PROMPTS
+        from redictum import LANGUAGE_NAMES, LANGUAGE_PROMPTS, _language_wizard
 
         last_idx = len(LANGUAGE_NAMES)
         last_code = list(LANGUAGE_NAMES.keys())[-1]
@@ -67,7 +67,7 @@ class TestLanguageWizard:
         assert result == ("auto", "auto")
 
     def test_select_other_known_code(self):
-        from redictum import _language_wizard, LANGUAGE_PROMPTS
+        from redictum import LANGUAGE_PROMPTS, _language_wizard
 
         with patch("builtins.input", side_effect=["0", "de"]):
             result = _language_wizard("en")
@@ -270,7 +270,7 @@ class TestRunLanguage:
 
     def test_cancel_at_save_confirm(self, app, tmp_path):
         """User picks language but says N to 'Save to config?' → config unchanged."""
-        from redictum import EXIT_OK, ConfigManager, LANGUAGE_PROMPTS
+        from redictum import EXIT_OK, LANGUAGE_PROMPTS, ConfigManager
 
         mgr = ConfigManager(tmp_path)
         mgr.load()
@@ -291,7 +291,7 @@ class TestRunLanguage:
         assert config["dependency"]["whisper_language"] == original["dependency"]["whisper_language"]
 
     def test_save_language(self, app, tmp_path):
-        from redictum import EXIT_OK, ConfigManager, LANGUAGE_PROMPTS
+        from redictum import EXIT_OK, LANGUAGE_PROMPTS, ConfigManager
 
         mgr = ConfigManager(tmp_path)
         mgr.load()
@@ -332,7 +332,7 @@ class TestRunLanguage:
 
     def test_daemon_running_warning(self, app, tmp_path, capsys):
         """When daemon is running, warning is printed but save still proceeds."""
-        from redictum import EXIT_OK, ConfigManager, LANGUAGE_PROMPTS
+        from redictum import EXIT_OK, LANGUAGE_PROMPTS, ConfigManager
 
         mgr = ConfigManager(tmp_path)
         mgr.load()
@@ -375,7 +375,7 @@ class TestFirstRunLanguageCheck:
 
     def test_yes_then_select_language(self, app, tmp_path, monkeypatch):
         """User says Y, picks a language, confirms save → config updated."""
-        from redictum import ConfigManager, LANGUAGE_PROMPTS
+        from redictum import LANGUAGE_PROMPTS, ConfigManager
 
         monkeypatch.setenv("LANG", "ru_RU.UTF-8")
         mgr = ConfigManager(tmp_path)
@@ -405,7 +405,7 @@ class TestFirstRunLanguageCheck:
 
     def test_yes_then_decline_save(self, app, tmp_path, monkeypatch):
         """User says Y, picks language, but declines save → config unchanged."""
-        from redictum import ConfigManager, LANGUAGE_PROMPTS
+        from redictum import LANGUAGE_PROMPTS, ConfigManager
 
         monkeypatch.setenv("LANG", "ru_RU.UTF-8")
         mgr = ConfigManager(tmp_path)

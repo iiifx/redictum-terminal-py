@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `recording_volume_level` in `[audio]` section. Enabled by default (30%)
 - Auto-sync config file after update: missing keys are added from the current template
   with default values, user settings preserved. Backup saved as `config.ini.bak`
+- Ruff linter (`ruff.toml`): rules E, F, W, I, UP, B with Python 3.10 target
+- pytest-cov coverage reporting with 75% minimum threshold
+- 95 new unit tests: VolumeController, ConfigManager.sync(), SoundNotifier,
+  HotkeyListener runtime, Daemon lifecycle, RedictumApp pipeline
+- GitHub Actions CI: lint → test → e2e pipeline (`.github/workflows/ci.yml`)
+- Dev dependencies file (`requirements-dev.txt`): pytest, pytest-cov, ruff
 
 ### Fixed
 - Fix regex injection in `ConfigManager.update()` and YAML migration: backslashes in
@@ -22,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   capturing the actual root cause (e.g. CUDA errors) instead of generic prefixes
 - Full stderr/stdout is now logged on failure for whisper-cli, ffmpeg, and cmake —
   previously lost due to truncation
+- Fix `raise` without `from` in exception chains (5 places) — proper exception chaining per B904
 
 ## [1.5.0] - 2026-02-24
 

@@ -41,7 +41,7 @@ def _load_redictum_module():
 @pytest.fixture()
 def default_config():
     """Return a deep copy of DEFAULT_CONFIG for safe mutation in tests."""
-    from redictum import ConfigManager, DEFAULT_CONFIG
+    from redictum import DEFAULT_CONFIG, ConfigManager
     return ConfigManager._deep_copy(DEFAULT_CONFIG)
 
 

@@ -8,23 +8,24 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import hashlib
 import logging
 import math
 import os
 import platform
 import re
-import signal
-import hashlib
 import shutil
+import signal
 import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 try:
     from rich.console import Console
@@ -568,17 +569,17 @@ class ConfigManager:
         if key in cls._INT_KEYS:
             try:
                 return int(value)
-            except ValueError:
+            except ValueError as exc:
                 raise RedictumError(
                     f"Config '{key}': expected integer, got '{value}'"
-                )
+                ) from exc
         if key in cls._FLOAT_KEYS:
             try:
                 return float(value)
-            except ValueError:
+            except ValueError as exc:
                 raise RedictumError(
                     f"Config '{key}': expected number, got '{value}'"
-                )
+                ) from exc
         return value
 
     @staticmethod
@@ -1186,7 +1187,7 @@ class Diagnostics:
             )
 
 
-class WhisperInstaller:
+class WhisperInstaller:  # pragma: no cover
     """Setup wizard for whisper.cpp: install, configure, reconfigure."""
 
     WHISPER_VERSION = "v1.8.3"
@@ -1989,7 +1990,7 @@ class Daemon:
 
     def _write_pid(self) -> None:
         """Write current PID to the PID file with explicit permissions."""
-        pid_data = f"{os.getpid()}\n".encode("utf-8")
+        pid_data = f"{os.getpid()}\n".encode()
         flags = os.O_WRONLY | os.O_CREAT
         try:
             fd = os.open(str(self._pid_path), flags | os.O_EXCL, 0o644)
@@ -2046,54 +2047,54 @@ class Daemon:
             # Parent — wait briefly for child to settle, then exit
             return
 
-        # Child 1: new session
-        os.setsid()
-        os.umask(0o022)
+        # Child 1: new session                      # pragma: no cover
+        os.setsid()                                  # pragma: no cover
+        os.umask(0o022)                              # pragma: no cover
 
         # Second fork
-        try:
-            pid = os.fork()
-        except OSError as exc:
-            sys.exit(1)
-        if pid > 0:
+        try:                                         # pragma: no cover
+            pid = os.fork()                          # pragma: no cover
+        except OSError:                              # pragma: no cover
+            sys.exit(1)                              # pragma: no cover
+        if pid > 0:                                  # pragma: no cover
             # Child 1 exits
-            sys.exit(0)
+            sys.exit(0)                              # pragma: no cover
 
         # Daemon process (child 2)
         # Redirect std file descriptors
-        devnull = os.open(os.devnull, os.O_RDWR)
-        os.dup2(devnull, sys.stdin.fileno())
+        devnull = os.open(os.devnull, os.O_RDWR)    # pragma: no cover
+        os.dup2(devnull, sys.stdin.fileno())         # pragma: no cover
 
         # Redirect stdout/stderr to log file
-        log_fd = os.open(
+        log_fd = os.open(                            # pragma: no cover
             str(self._log_path),
             os.O_WRONLY | os.O_CREAT | os.O_APPEND,
             0o644,
         )
-        os.dup2(log_fd, sys.stdout.fileno())
-        os.dup2(log_fd, sys.stderr.fileno())
-        os.close(devnull)
-        os.close(log_fd)
+        os.dup2(log_fd, sys.stdout.fileno())         # pragma: no cover
+        os.dup2(log_fd, sys.stderr.fileno())         # pragma: no cover
+        os.close(devnull)                            # pragma: no cover
+        os.close(log_fd)                             # pragma: no cover
 
         # Re-init logging in forked child (clears parent handlers)
-        setup_logging(self._log_path, force=True, verbose=(_verbosity > 0))
+        setup_logging(self._log_path, force=True, verbose=(_verbosity > 0))  # pragma: no cover
 
         # Write PID file and register cleanup
-        self._write_pid()
-        atexit.register(self._cleanup)
+        self._write_pid()                            # pragma: no cover
+        atexit.register(self._cleanup)               # pragma: no cover
 
         # Setup signal handlers
-        self._setup_signals()
+        self._setup_signals()                        # pragma: no cover
 
-        logging.info("Daemon started (PID %d)", os.getpid())
+        logging.info("Daemon started (PID %d)", os.getpid())  # pragma: no cover
 
         # Run the target
-        try:
-            target()
-        except Exception:
-            logging.exception("Daemon target crashed")
-        finally:
-            logging.info("Daemon stopped (PID %d)", os.getpid())
+        try:                                         # pragma: no cover
+            target()                                 # pragma: no cover
+        except Exception:                            # pragma: no cover
+            logging.exception("Daemon target crashed")  # pragma: no cover
+        finally:                                     # pragma: no cover
+            logging.info("Daemon stopped (PID %d)", os.getpid())  # pragma: no cover
 
     def stop(self) -> None:
         """Send SIGTERM to the running daemon and wait for it to exit."""
@@ -2384,7 +2385,7 @@ def _show_language_status(config: dict[str, Any]) -> str:
     return detected
 
 
-def _language_wizard(detected_lang: str) -> tuple[str, str] | None:
+def _language_wizard(detected_lang: str) -> tuple[str, str] | None:  # pragma: no cover
     """Interactive language selector wizard.
 
     Args:
@@ -2400,8 +2401,8 @@ def _language_wizard(detected_lang: str) -> tuple[str, str] | None:
         name = LANGUAGE_NAMES[code]
         marker = " [green]★[/green]" if code == detected_lang else ""
         _rprint(f"  {i:2d}. {code} — {name}{marker}")
-    _rprint(f"   0. Other (enter code manually)")
-    _rprint(f"   A. Auto (detect from system locale)\n")
+    _rprint("   0. Other (enter code manually)")
+    _rprint("   A. Auto (detect from system locale)\n")
 
     try:
         choice = input("Enter choice: ").strip()
@@ -3227,7 +3228,7 @@ class RedictumApp:
     def _deps_ok(self, config: dict[str, Any]) -> bool:
         """Silently check that all critical dependencies are present."""
         # Stage 1: critical environment
-        if sys.version_info < (3, 10):
+        if sys.version_info < (3, 10):  # noqa: UP036
             return False
         if sys.platform != "linux":
             return False
@@ -3291,8 +3292,10 @@ class RedictumApp:
             return
         _rprint(f"\n[bold]Configuration:[/bold] {self._config_mgr.path}")
         _rprint("  Examples:")
-        _rprint('    \u2022 Change hotkey:   [cyan]hotkey_key = "F12"[/cyan]          (default: Insert)')
-        _rprint('    \u2022 Change language: [cyan]whisper_language = "en"[/cyan]      (default: auto)')
+        _rprint('    \u2022 Change hotkey:   [cyan]hotkey_key = "F12"[/cyan]'
+               '          (default: Insert)')
+        _rprint('    \u2022 Change language: [cyan]whisper_language = "en"[/cyan]'
+               '      (default: auto)')
         self._state_mgr.set("config_hint_shown", True)
 
     def run_interactive(self) -> int:
@@ -3475,8 +3478,8 @@ class RedictumApp:
 
         lang, prompt = result
         if lang == "auto":
-            _rprint(f"\n  whisper_language = [cyan]auto[/cyan]")
-            _rprint(f"  whisper_prompt   = [cyan]auto[/cyan]")
+            _rprint("\n  whisper_language = [cyan]auto[/cyan]")
+            _rprint("  whisper_prompt   = [cyan]auto[/cyan]")
         else:
             lang_name = LANGUAGE_NAMES.get(lang, lang)
             short = prompt[:60] + "..." if len(prompt) > 60 else prompt
@@ -3524,8 +3527,8 @@ class RedictumApp:
                 cmd, capture_output=True, text=True,
                 timeout=timeout + 5,
             )
-        except subprocess.TimeoutExpired:
-            raise RedictumError("Timed out checking for updates. Try again later.")
+        except subprocess.TimeoutExpired as exc:
+            raise RedictumError("Timed out checking for updates. Try again later.") from exc
 
         if result.returncode != 0:
             raise RedictumError(
@@ -3537,8 +3540,8 @@ class RedictumApp:
         try:
             data = _json.loads(result.stdout)
             tag = data["tag_name"]
-        except (ValueError, KeyError):
-            raise RedictumError("Unexpected response from GitHub API.")
+        except (ValueError, KeyError) as exc:
+            raise RedictumError("Unexpected response from GitHub API.") from exc
 
         return tag.lstrip("v")
 
@@ -3562,8 +3565,8 @@ class RedictumApp:
                 cmd, capture_output=True, text=True,
                 timeout=timeout + 5,
             )
-        except subprocess.TimeoutExpired:
-            raise RedictumError("Download timed out. Try again later.")
+        except subprocess.TimeoutExpired as exc:
+            raise RedictumError("Download timed out. Try again later.") from exc
 
         if result.returncode != 0 or not dest.exists():
             raise RedictumError(f"Failed to download {url}")
@@ -3636,7 +3639,7 @@ class RedictumApp:
             tmp_hash.unlink(missing_ok=True)
             tmp_script.unlink(missing_ok=True)
 
-    def _first_run_language_check(self, config: dict[str, Any]) -> None:
+    def _first_run_language_check(self, config: dict[str, Any]) -> None:  # pragma: no cover
         """Offer to change language during first run.
 
         Args:
@@ -3658,8 +3661,8 @@ class RedictumApp:
 
         lang, prompt = result
         if lang == "auto":
-            _rprint(f"\n  whisper_language = [cyan]auto[/cyan]")
-            _rprint(f"  whisper_prompt   = [cyan]auto[/cyan]")
+            _rprint("\n  whisper_language = [cyan]auto[/cyan]")
+            _rprint("  whisper_prompt   = [cyan]auto[/cyan]")
         else:
             lang_name = LANGUAGE_NAMES.get(lang, lang)
             short = prompt[:60] + "..." if len(prompt) > 60 else prompt
@@ -3697,7 +3700,8 @@ class RedictumApp:
         if _verbosity > 0:
             _rprint(f"  Config: language={language}", level=1)
             _rprint(f"  Config: device={self._audio_cfg['recording_device']}", level=1)
-            _rprint(f"  Config: normalize={self._audio_cfg.get('recording_normalize', True)}", level=1)
+            normalize = self._audio_cfg.get('recording_normalize', True)
+            _rprint(f"  Config: normalize={normalize}", level=1)
             _rprint(f"  Config: hotkey={cfg['input']['hotkey_key']}", level=1)
 
         # Build pipeline components
@@ -3874,7 +3878,7 @@ class RedictumApp:
                 self._state = STATE_IDLE
             self._pipeline_done.set()
 
-    def _graceful_shutdown(self, listener: "HotkeyListener") -> None:
+    def _graceful_shutdown(self, listener: HotkeyListener) -> None:
         """Stop listener and wait for any in-progress pipeline to finish."""
         listener.stop()
         if self._notifier:

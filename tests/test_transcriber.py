@@ -259,6 +259,7 @@ class TestTranscribeResult:
 
     def test_timeout_raises(self, make_transcriber, monkeypatch):
         import subprocess
+
         from redictum import RedictumError
 
         transcriber = make_transcriber(timeout=1)

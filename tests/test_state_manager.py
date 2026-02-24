@@ -17,7 +17,7 @@ class TestPath:
     """StateManager.path property."""
 
     def test_returns_correct_path(self, tmp_path):
-        from redictum import StateManager, STATE_FILENAME
+        from redictum import STATE_FILENAME, StateManager
 
         mgr = StateManager(tmp_path)
         assert mgr.path == tmp_path / STATE_FILENAME

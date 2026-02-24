@@ -1,0 +1,8 @@
+[run]
+source = redictum
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__
+    raise NotImplementedError

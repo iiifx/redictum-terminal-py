@@ -3,11 +3,8 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # _compare_versions
@@ -120,7 +117,7 @@ class TestRunUpdate:
         return RedictumApp(tmp_path)
 
     def test_already_up_to_date(self, app, monkeypatch):
-        from redictum import VERSION, EXIT_OK
+        from redictum import EXIT_OK, VERSION
 
         monkeypatch.setattr(app, "_fetch_latest_version", lambda: VERSION)
         assert app.run_update() == EXIT_OK
@@ -142,16 +139,16 @@ class TestRunUpdate:
             app.run_update()
 
     def test_user_declines(self, app, monkeypatch):
-        from redictum import EXIT_OK
         import redictum
+        from redictum import EXIT_OK
 
         monkeypatch.setattr(app, "_fetch_latest_version", lambda: "99.0.0")
         monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: False)
         assert app.run_update() == EXIT_OK
 
     def test_eof_at_prompt(self, app, monkeypatch):
-        from redictum import EXIT_OK
         import redictum
+        from redictum import EXIT_OK
 
         monkeypatch.setattr(app, "_fetch_latest_version", lambda: "99.0.0")
 
@@ -163,8 +160,8 @@ class TestRunUpdate:
         assert app.run_update() == EXIT_OK
 
     def test_daemon_running(self, app, monkeypatch, tmp_path):
-        from redictum import EXIT_ERROR, Daemon
         import redictum
+        from redictum import EXIT_ERROR, Daemon
 
         monkeypatch.setattr(app, "_fetch_latest_version", lambda: "99.0.0")
         monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: True)
@@ -173,8 +170,8 @@ class TestRunUpdate:
         assert app.run_update() == EXIT_ERROR
 
     def test_hash_mismatch(self, app, monkeypatch, tmp_path):
-        from redictum import EXIT_ERROR
         import redictum
+        from redictum import EXIT_ERROR
 
         monkeypatch.setattr(app, "_fetch_latest_version", lambda: "99.0.0")
         monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: True)
@@ -194,8 +191,9 @@ class TestRunUpdate:
 
     def test_success(self, app, monkeypatch, tmp_path):
         import hashlib
-        from redictum import EXIT_OK
+
         import redictum
+        from redictum import EXIT_OK
 
         monkeypatch.setattr(app, "_fetch_latest_version", lambda: "99.0.0")
         monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: True)
