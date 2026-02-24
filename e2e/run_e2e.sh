@@ -174,6 +174,8 @@ recording_device = "pulse"
 recording_normalize = true
 recording_silence_detection = true
 recording_silence_threshold = 200
+recording_volume_reduce = true
+recording_volume_level = 30
 
 [input]
 hotkey_key = "Insert"
@@ -182,17 +184,21 @@ hotkey_translate_key = "ctrl+Insert"
 
 [clipboard]
 paste_auto = true
+paste_prefix = ""
+paste_postfix = " "
 paste_restore_delay = 0.3
 
 [notification]
+sound_signal_volume = 30
 sound_signal_start = true
 sound_signal_processing = false
 sound_signal_done = true
 sound_signal_error = true
 
-[transcript]
-log_enabled = true
-log_max_files = 30
+[storage]
+audio_max_files = 50
+transcripts_max_files = 50
+logs_max_files = 50
 CONF
     mkdir -p "$WORKDIR/audio" "$WORKDIR/transcripts" "$WORKDIR/logs"
 }
@@ -211,7 +217,7 @@ cleanup_test() {
             done
         fi
     fi
-    rm -f "$WORKDIR/config.ini" "$WORKDIR/.state" "$WORKDIR/redictum.pid"
+    rm -f "$WORKDIR/config.ini" "$WORKDIR/config.ini.bak" "$WORKDIR/.state" "$WORKDIR/redictum.pid"
     rm -f "$WORKDIR/fake-model.bin"
     rm -rf "$WORKDIR/audio" "$WORKDIR/transcripts" "$WORKDIR/logs"
 }

@@ -91,6 +91,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "recording_normalize": True,
         "recording_silence_detection": True,
         "recording_silence_threshold": 200,
+        "recording_volume_reduce": True,
+        "recording_volume_level": 30,
     },
     "input": {
         "hotkey_key": "Insert",
@@ -160,6 +162,15 @@ recording_silence_detection = true
 # RMS energy threshold for silence detection (applied to raw audio before normalize)
 # Typical mic noise: ~50-150, speech with silence: ~300+. Lower = more sensitive
 recording_silence_threshold = 200
+
+# Reduce system volume while recording to prevent mic picking up speaker audio
+# Useful when music, YouTube, or Meet is playing during recording
+recording_volume_reduce = true
+
+# Volume reduction percent (0-100) relative to current level
+# Example: 30 means keep 30% of current volume (50% → 15%, 100% → 30%)
+# 0 = full mute, 100 = no reduction
+recording_volume_level = 30
 
 # --- Input -------------------------------------------------------------------
 
@@ -293,6 +304,7 @@ class ConfigManager:
     _BOOL_KEYS: frozenset[str] = frozenset({
         "recording_normalize",
         "recording_silence_detection",
+        "recording_volume_reduce",
         "paste_auto",
         "sound_signal_start",
         "sound_signal_processing",
@@ -306,6 +318,7 @@ class ConfigManager:
         "transcripts_max_files",
         "logs_max_files",
         "recording_silence_threshold",
+        "recording_volume_level",
     })
     _FLOAT_KEYS: frozenset[str] = frozenset({
         "hotkey_hold_delay",
@@ -378,7 +391,7 @@ class ConfigManager:
             ini_val = self._format_value(value)
             text = re.sub(
                 rf"^({re.escape(key)}\s*=)\s*.*$",
-                rf"\1 {ini_val}",
+                lambda m, v=ini_val: f"{m.group(1)} {v}",
                 text,
                 count=1,
                 flags=re.MULTILINE,
@@ -438,7 +451,7 @@ class ConfigManager:
             ini_val = self._format_value(value)
             text = re.sub(
                 rf"^({re.escape(key)}\s*=)\s*.*$",
-                rf"\1 {ini_val}",
+                lambda m, v=ini_val: f"{m.group(1)} {v}",
                 text,
                 count=1,
                 flags=re.MULTILINE,
@@ -449,6 +462,91 @@ class ConfigManager:
         logging.info("Migrated config.yaml → config.ini")
 
     # -- private helpers -----------------------------------------------------
+
+    def sync(self) -> None:
+        """Sync config file on disk with the current template.
+
+        If config.ini exists and is missing keys from DEFAULT_CONFIG,
+        regenerate it from DEFAULT_CONFIG_INI and re-apply user values.
+        Creates a .bak backup before rewriting.
+        """
+        if not self._path.exists():
+            return
+
+        import configparser
+
+        cp = configparser.ConfigParser(interpolation=None)
+        try:
+            cp.read(str(self._path), encoding="utf-8")
+        except configparser.Error:
+            return  # broken config — load() will handle the error
+
+        # Collect all keys present in user's file
+        user_keys: set[str] = set()
+        for section in cp.sections():
+            for key, _value in cp.items(section):
+                user_keys.add(key)
+
+        # Collect all keys expected by DEFAULT_CONFIG
+        default_keys: set[str] = set()
+        for section_data in DEFAULT_CONFIG.values():
+            if isinstance(section_data, dict):
+                default_keys.update(section_data.keys())
+
+        if default_keys.issubset(user_keys):
+            return  # nothing to sync
+
+        missing = default_keys - user_keys
+        logging.info("Config sync: adding missing keys: %s", sorted(missing))
+
+        # Collect user values (parsed to Python types, only known keys)
+        user_values: dict[str, Any] = {}
+        for section in cp.sections():
+            for key, raw_value in cp.items(section):
+                if key in default_keys:
+                    user_values[key] = self._parse_value(key, raw_value)
+
+        # Build new config in memory: fresh template + user values
+        text = DEFAULT_CONFIG_INI
+        for key, value in user_values.items():
+            ini_val = self._format_value(value)
+            text = re.sub(
+                rf"^({re.escape(key)}\s*=)\s*.*$",
+                lambda m, v=ini_val: f"{m.group(1)} {v}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+
+        # Backup old config
+        backup_path = self._path.with_suffix(".ini.bak")
+        try:
+            shutil.copy2(str(self._path), str(backup_path))
+            logging.info("Config backup saved: %s", backup_path)
+        except OSError as exc:
+            logging.warning("Config sync: backup failed (%s), aborting sync", exc)
+            return
+
+        # Atomic write: tempfile + rename
+        fd = None
+        tmp_path = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(self._path.parent), suffix=".tmp",
+            )
+            os.write(fd, text.encode("utf-8"))
+            os.close(fd)
+            fd = None
+            os.rename(tmp_path, str(self._path))
+            tmp_path = None
+            logging.info("Config synced: added %s", sorted(missing))
+        except OSError as exc:
+            logging.warning("Config sync: write failed (%s), aborting", exc)
+        finally:
+            if fd is not None:
+                os.close(fd)
+            if tmp_path is not None:
+                Path(tmp_path).unlink(missing_ok=True)
 
     def _write_default(self) -> None:
         """Write DEFAULT_CONFIG_INI template with comments."""
@@ -2573,6 +2671,66 @@ class ClipboardManager:
         return None
 
 
+class VolumeController:
+    """Reduce system volume during recording, restore on stop.
+
+    Uses ``pactl`` to manipulate the default PulseAudio/PipeWire sink volume.
+    All calls are best-effort — failures are logged but never break recording.
+    Thread-safe: all access to saved state is protected by an internal lock.
+    """
+
+    def __init__(self, volume_level: int) -> None:
+        self._volume_level = max(0, min(100, volume_level))
+        self._lock = threading.Lock()
+        self._saved_volume: str | None = None
+
+    def reduce(self) -> None:
+        """Save current sink volume, then reduce to configured percentage of it."""
+        with self._lock:
+            if self._saved_volume is not None:
+                return
+            try:
+                result = subprocess.run(
+                    ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
+                    capture_output=True, text=True, timeout=2,
+                )
+                match = re.search(r"(\d+)%", result.stdout)
+                if match:
+                    self._saved_volume = match.group(1) + "%"
+                else:
+                    logging.warning("Could not parse sink volume: %s", result.stdout.strip())
+                    return
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                logging.warning("pactl get-sink-volume failed, skipping volume reduce")
+                return
+            current = int(match.group(1))
+            target = int(current * self._volume_level / 100)
+        try:
+            subprocess.run(
+                ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{target}%"],
+                capture_output=True, timeout=2,
+            )
+            logging.info("Volume reduced to %d%% (was %s)", target, self._saved_volume)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            logging.warning("pactl set-sink-volume failed")
+
+    def restore(self) -> None:
+        """Restore previously saved volume. Safe to call multiple times."""
+        with self._lock:
+            if self._saved_volume is None:
+                return
+            saved = self._saved_volume
+            self._saved_volume = None
+        try:
+            subprocess.run(
+                ["pactl", "set-sink-volume", "@DEFAULT_SINK@", saved],
+                capture_output=True, timeout=2,
+            )
+            logging.info("Volume restored to %s", saved)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            logging.warning("pactl set-sink-volume restore failed")
+
+
 class SoundNotifier:
     """Play WAV feedback tones via paplay.
 
@@ -2969,6 +3127,7 @@ class RedictumApp:
 
     def _load_config(self) -> dict[str, Any]:
         """Load config and apply CLI overrides (if any)."""
+        self._config_mgr.sync()
         config = self._config_mgr.load()
         if self._overrides:
             _apply_overrides(config, self._overrides)
@@ -3553,6 +3712,12 @@ class RedictumApp:
         )
         self._clipboard = ClipboardManager()
         self._notifier = SoundNotifier(volume=self._sound_cfg.get("sound_signal_volume", 30))
+        if self._audio_cfg.get("recording_volume_reduce", True):
+            self._volume_ctl: VolumeController | None = VolumeController(
+                self._audio_cfg.get("recording_volume_level", 30),
+            )
+        else:
+            self._volume_ctl = None
         logs_dir = self._log_path.parent
         self._housekeeper = Housekeeping(
             audio_dir, self._transcripts_dir, logs_dir, cfg["storage"],
@@ -3601,6 +3766,9 @@ class RedictumApp:
             return
         if self._sound_cfg.get("sound_signal_start", True):
             self._notifier.play_start()
+        if self._volume_ctl:
+            time.sleep(0.15)
+            self._volume_ctl.reduce()
         _rprint(f"  Recording: device={self._audio_cfg['recording_device']}", level=1)
         logging.info("Recording started (mode: %s)", mode)
 
@@ -3621,6 +3789,10 @@ class RedictumApp:
         """Record → silence check → normalize → transcribe → paste."""
         try:
             audio_path = self._recorder.stop()
+            # Restore volume ASAP so user hears audio during processing;
+            # the finally block below is a safety net (restore is idempotent).
+            if self._volume_ctl:
+                self._volume_ctl.restore()
             if self._sound_cfg.get("sound_signal_processing", False):
                 self._notifier.play_processing()
             if audio_path is None:
@@ -3696,6 +3868,8 @@ class RedictumApp:
             if self._sound_cfg.get("sound_signal_error", True):
                 self._notifier.play_error()
         finally:
+            if self._volume_ctl:
+                self._volume_ctl.restore()
             with self._state_lock:
                 self._state = STATE_IDLE
             self._pipeline_done.set()
@@ -3709,6 +3883,8 @@ class RedictumApp:
             current = self._state
         if current == STATE_RECORDING:
             self._recorder.cancel()
+            if self._volume_ctl:
+                self._volume_ctl.restore()
             logging.info("Cancelled recording during shutdown")
         elif current == STATE_PROCESSING:
             logging.info("Waiting for processing to finish...")

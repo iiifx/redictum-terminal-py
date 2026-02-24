@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Auto-reduce system volume during recording to prevent mic picking up speaker audio
+  (music, YouTube, Meet). Volume drops to a configurable percentage of current level
+  and restores immediately when recording stops. Config: `recording_volume_reduce`,
+  `recording_volume_level` in `[audio]` section. Enabled by default (30%)
+- Auto-sync config file after update: missing keys are added from the current template
+  with default values, user settings preserved. Backup saved as `config.ini.bak`
+
 ### Fixed
+- Fix regex injection in `ConfigManager.update()` and YAML migration: backslashes in
+  config values (e.g. Windows paths) could crash or corrupt the config file
 - Truncated stderr in error messages now shows last 500 chars (tail) instead of first 200 (head),
   capturing the actual root cause (e.g. CUDA errors) instead of generic prefixes
 - Full stderr/stdout is now logged on failure for whisper-cli, ffmpeg, and cmake —
