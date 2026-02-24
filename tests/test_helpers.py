@@ -121,6 +121,14 @@ class TestBuildParser:
         args = parser.parse_args(["--reset-config"])
         assert args.reset_config is True
 
+    def test_reset_config_with_subcommand_fails(self, monkeypatch, capsys):
+        from redictum import EXIT_ERROR, main
+
+        monkeypatch.setattr("sys.argv", ["redictum", "--reset-config", "start"])
+        rc = main()
+        assert rc == EXIT_ERROR
+        assert "interactive mode" in capsys.readouterr().err
+
     def test_version_flag(self):
         from redictum import build_parser
 

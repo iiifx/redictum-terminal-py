@@ -3965,6 +3965,10 @@ def main() -> int:
     app = RedictumApp(script_dir, overrides=args.overrides)
 
     if args.reset_config:
+        if args.command is not None:
+            print("Error: --reset-config can only be used in interactive"
+                  " mode (without subcommand)", file=sys.stderr)
+            return EXIT_ERROR
         config_path = script_dir / "config.ini"
         if config_path.exists():
             config_path.unlink()

@@ -334,23 +334,16 @@ test_07_stale_pid() {
     assert_pid_alive "$pid" || return 1
 }
 
-# T08: --reset-config + start refuses (--reset-config deletes .state, daemon requires init)
+# T08: --reset-config + subcommand refuses (only interactive mode allowed)
 test_08_config_start_refuses() {
     prepare_env
-    python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
-    wait_for_daemon || return 1
-    local pid
-    pid=$(read_pid)
 
-    python3 "$SCRIPT" stop </dev/null >/dev/null 2>&1
-    wait_for_pid_gone "$pid" || return 1
-
-    # --reset-config deletes .state + config.ini → start must refuse
+    # --reset-config with any subcommand must fail immediately
     local output
     output=$(python3 "$SCRIPT" --reset-config start </dev/null 2>&1)
     local rc=$?
     assert_exit_error $rc || return 1
-    assert_contains "$output" "not initialized" || return 1
+    assert_contains "$output" "interactive mode" || return 1
 }
 
 # T09: Restart cycle — stop then start, PID alive
