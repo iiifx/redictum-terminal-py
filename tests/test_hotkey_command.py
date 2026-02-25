@@ -1,8 +1,6 @@
 """Tests for hotkey command: reassign push-to-talk keys."""
-from __future__ import annotations
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # build_parser: hotkey subcommand
@@ -336,7 +334,7 @@ class TestRunHotkey:
     def test_daemon_notice(self, app, monkeypatch, capsys):
         import redictum
         from pynput.keyboard import Key
-        from redictum import Daemon, EXIT_OK
+        from redictum import Daemon
 
         monkeypatch.setattr("builtins.input", lambda _: "1")
         monkeypatch.setattr(

@@ -1,11 +1,9 @@
 """Tests for self-update functionality."""
-from __future__ import annotations
 
 import json
 import subprocess
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # HttpFetcherBackend ABC
@@ -424,7 +422,6 @@ class TestRunUpdate:
 
     def test_changelog_displayed(self, app, monkeypatch, capsys):
         import redictum
-        from redictum import EXIT_OK
 
         notes = "### Added\n- Cool feature\n- Another feature"
         monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("99.0.0", notes))
@@ -437,7 +434,6 @@ class TestRunUpdate:
 
     def test_no_changelog_when_empty(self, app, monkeypatch, capsys):
         import redictum
-        from redictum import EXIT_OK
 
         monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("99.0.0", ""))
         monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: False)
