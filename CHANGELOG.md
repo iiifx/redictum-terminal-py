@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 - Extract `SoundPlayerBackend` ABC from `SoundNotifier`: platform-specific `paplay` logic moved to `PaplayPlayer`, tone generation stays in `SoundNotifier`
 - Extract `AudioRecorderBackend` ABC from `AudioRecorder`: `arecord` subprocess management moved to `ArecordRecorder`
+- Extract `AudioProcessorBackend` ABC from `AudioProcessor`: `ffmpeg` normalization moved to `FfmpegProcessor`
 
 ### Fixed
 - Volume not fully restored when multiple redictum instances run simultaneously

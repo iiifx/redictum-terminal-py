@@ -135,7 +135,9 @@ redictum-terminal-py/
 | `AudioRecorderBackend` | ABC for audio recording (start/stop/cancel lifecycle) |
 | `ArecordRecorder` | ALSA arecord implementation via subprocess |
 | `AudioRecorder` | Recording orchestrator — filenames, validation, logging (delegates to backend) |
-| `AudioProcessor` | Normalize via ffmpeg loudnorm |
+| `AudioProcessorBackend` | ABC for audio normalization |
+| `FfmpegProcessor` | FFmpeg loudnorm implementation via subprocess |
+| `AudioProcessor` | Normalization orchestrator + speech detection (delegates to backend) |
 | `Transcriber` | Transcribe via whisper-cli (--translate for English, language-aware prompts) |
 | `ClipboardManager` | xclip copy/paste + universal save/restore (text, images, binary via X11 TARGETS) |
 | `VolumeController` | System volume save/restore during recording |

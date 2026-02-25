@@ -1,4 +1,4 @@
-"""Tests for AudioProcessor."""
+"""Tests for AudioProcessor, AudioProcessorBackend ABC, and FfmpegProcessor."""
 from __future__ import annotations
 
 import struct
@@ -10,9 +10,100 @@ import pytest
 
 @pytest.fixture()
 def processor():
-    from redictum import AudioProcessor
+    from redictum import AudioProcessor, FfmpegProcessor
 
-    return AudioProcessor()
+    return AudioProcessor(FfmpegProcessor())
+
+
+# ── AudioProcessorBackend ABC ────────────────────────────────────────
+
+
+class TestAudioProcessorBackendABC:
+    """AudioProcessorBackend cannot be instantiated directly."""
+
+    def test_cannot_instantiate(self):
+        from redictum import AudioProcessorBackend
+
+        with pytest.raises(TypeError):
+            AudioProcessorBackend()  # type: ignore[abstract]
+
+    def test_subclass_must_implement_all(self):
+        from redictum import AudioProcessorBackend
+
+        class Incomplete(AudioProcessorBackend):
+            pass
+
+        with pytest.raises(TypeError):
+            Incomplete()  # type: ignore[abstract]
+
+
+# ── FfmpegProcessor unit tests ───────────────────────────────────────
+
+
+class TestFfmpegProcessor:
+    """FfmpegProcessor: ffmpeg subprocess management."""
+
+    def test_normalize_calls_ffmpeg(self, tmp_path, monkeypatch):
+        from redictum import FfmpegProcessor
+
+        monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/ffmpeg")
+        mock_run = MagicMock()
+        mock_run.return_value.returncode = 0
+        monkeypatch.setattr("subprocess.run", mock_run)
+
+        backend = FfmpegProcessor()
+        inp = tmp_path / "in.wav"
+        out = tmp_path / "out.wav"
+        inp.write_text("x")
+        result = backend.normalize(inp, out)
+
+        assert result is True
+        args = mock_run.call_args[0][0]
+        assert args[0] == "ffmpeg"
+        assert str(inp) in args
+        assert str(out) in args
+
+    def test_normalize_returns_false_without_ffmpeg(self, tmp_path, monkeypatch):
+        from redictum import FfmpegProcessor
+
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+        backend = FfmpegProcessor()
+        result = backend.normalize(tmp_path / "in.wav", tmp_path / "out.wav")
+        assert result is False
+
+    def test_normalize_raises_on_failure(self, tmp_path, monkeypatch):
+        from redictum import FfmpegProcessor, RedictumError
+
+        monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/ffmpeg")
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = b"error details"
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+
+        backend = FfmpegProcessor()
+        inp = tmp_path / "in.wav"
+        inp.write_text("x")
+        with pytest.raises(RedictumError, match="ffmpeg normalization failed"):
+            backend.normalize(inp, tmp_path / "out.wav")
+
+    def test_normalize_raises_on_timeout(self, tmp_path, monkeypatch):
+        from redictum import FfmpegProcessor, RedictumError
+
+        monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/ffmpeg")
+
+        def fake_run(*a, **kw):
+            raise subprocess.TimeoutExpired("ffmpeg", 60)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+
+        backend = FfmpegProcessor()
+        inp = tmp_path / "in.wav"
+        inp.write_text("x")
+        with pytest.raises(RedictumError, match="timed out"):
+            backend.normalize(inp, tmp_path / "out.wav")
+
+
+# ── AudioProcessor integration tests (via FfmpegProcessor) ──────────
 
 
 class TestNormalize:
@@ -31,6 +122,7 @@ class TestNormalize:
             r.stderr = b""
             return r
 
+        monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/ffmpeg")
         monkeypatch.setattr("subprocess.run", fake_run)
         result = processor.normalize(input_path)
         assert result.stem == "rec_001_norm"
@@ -48,6 +140,7 @@ class TestNormalize:
             r.stderr = b"error details"
             return r
 
+        monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/ffmpeg")
         monkeypatch.setattr("subprocess.run", fake_run)
         with pytest.raises(RedictumError, match="ffmpeg normalization failed"):
             processor.normalize(input_path)
@@ -61,9 +154,17 @@ class TestNormalize:
         def fake_run(cmd, **kwargs):
             raise subprocess.TimeoutExpired(cmd, 60)
 
+        monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/ffmpeg")
         monkeypatch.setattr("subprocess.run", fake_run)
         with pytest.raises(RedictumError, match="timed out"):
             processor.normalize(input_path)
+
+    def test_skips_when_unavailable(self, processor, monkeypatch, tmp_path):
+        input_path = tmp_path / "rec.wav"
+        input_path.write_text("x")
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+        result = processor.normalize(input_path)
+        assert result == input_path
 
 
 def _build_wav(chunks: list[tuple[bytes, bytes]]) -> bytes:

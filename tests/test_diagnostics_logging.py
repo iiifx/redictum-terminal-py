@@ -426,16 +426,16 @@ class TestNormalizeFfmpegFallback:
     """AudioProcessor.normalize returns input_path when ffmpeg is missing."""
 
     def test_no_ffmpeg_returns_input(self, monkeypatch, tmp_path, caplog):
-        from redictum import AudioProcessor
+        from redictum import AudioProcessor, FfmpegProcessor
 
         monkeypatch.setattr("shutil.which", lambda x: None)
         audio = tmp_path / "test.wav"
         audio.write_bytes(b"\x00" * 100)
-        proc = AudioProcessor()
+        proc = AudioProcessor(FfmpegProcessor())
         with caplog.at_level(logging.WARNING):
             result = proc.normalize(audio)
         assert result == audio
-        assert any("ffmpeg not found" in r.message for r in caplog.records)
+        assert any("unavailable" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

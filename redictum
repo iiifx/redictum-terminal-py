@@ -2205,26 +2205,30 @@ class AudioRecorder:
             self._current_file = None
 
 
-class AudioProcessor:
-    """Normalize audio via ffmpeg."""
+class AudioProcessorBackend(ABC):
+    """Abstract audio normalizer."""
 
-    def normalize(self, input_path: Path) -> Path:
-        """Normalize audio levels of the given file.
-
-        Args:
-            input_path: Path to the raw audio file.
+    @abstractmethod
+    def normalize(self, input_path: Path, output_path: Path) -> bool:
+        """Normalize audio from *input_path* to *output_path*.
 
         Returns:
-            Path to the normalized audio file, or *input_path* if ffmpeg
-            is not installed.
+            True on success, False if the tool is unavailable.
 
         Raises:
-            RedictumError: If ffmpeg fails.
+            RedictumError: If the tool is present but fails.
         """
+
+
+class FfmpegProcessor(AudioProcessorBackend):
+    """FFmpeg loudnorm implementation."""
+
+    TIMEOUT = 60
+
+    def normalize(self, input_path: Path, output_path: Path) -> bool:
+        """Normalize audio via ffmpeg loudnorm filter."""
         if not shutil.which("ffmpeg"):
-            logging.warning("ffmpeg not found, skipping normalization")
-            return input_path
-        output_path = input_path.with_stem(input_path.stem + "_norm")
+            return False
         try:
             result = subprocess.run(
                 [
@@ -2238,7 +2242,7 @@ class AudioProcessor:
                 ],
                 stderr=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                timeout=60,
+                timeout=self.TIMEOUT,
             )
         except subprocess.TimeoutExpired as exc:
             raise RedictumError("ffmpeg normalization timed out") from exc
@@ -2249,6 +2253,32 @@ class AudioProcessor:
                 f"ffmpeg normalization failed (code {result.returncode}): "
                 f"{stderr_text.strip()[-500:]}"
             )
+        return True
+
+
+class AudioProcessor:
+    """Normalize audio and detect speech — platform-independent orchestrator."""
+
+    def __init__(self, backend: AudioProcessorBackend) -> None:
+        self._backend = backend
+
+    def normalize(self, input_path: Path) -> Path:
+        """Normalize audio levels of the given file.
+
+        Args:
+            input_path: Path to the raw audio file.
+
+        Returns:
+            Path to the normalized audio file, or *input_path* if the
+            normalizer is unavailable.
+
+        Raises:
+            RedictumError: If normalization fails.
+        """
+        output_path = input_path.with_stem(input_path.stem + "_norm")
+        if not self._backend.normalize(input_path, output_path):
+            logging.warning("Audio normalizer unavailable, skipping")
+            return input_path
         _rprint(f"  Normalize: {input_path.name} → {output_path.name}", level=1)
         logging.info(
             "Audio normalized: %s -> %s", input_path.name, output_path.name
@@ -4146,7 +4176,7 @@ class RedictumApp:
         # Build pipeline components
         rec_backend = ArecordRecorder(self._audio_cfg["recording_device"])
         self._recorder = AudioRecorder(audio_dir, rec_backend)
-        self._processor = AudioProcessor()
+        self._processor = AudioProcessor(FfmpegProcessor())
         self._transcriber = Transcriber(
             dep["whisper_cli"],
             dep["whisper_model"],
