@@ -2795,10 +2795,50 @@ class ClipboardManager:
         return None
 
 
+class VolumeBackend(ABC):
+    """Abstract volume control — get/set system volume."""
+
+    @abstractmethod
+    def get_volume(self) -> int | None:
+        """Return current system volume (0–100), or None on failure."""
+
+    @abstractmethod
+    def set_volume(self, percent: int) -> None:
+        """Set system volume to *percent* (0–100)."""
+
+
+class PactlVolumeBackend(VolumeBackend):
+    """PulseAudio/PipeWire volume control via pactl."""
+
+    def get_volume(self) -> int | None:
+        """Read current default sink volume percentage via pactl."""
+        try:
+            result = subprocess.run(
+                ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
+                capture_output=True, text=True, timeout=2,
+            )
+            match = re.search(r"(\d+)%", result.stdout)
+            if match:
+                return int(match.group(1))
+            logging.warning("Could not parse sink volume: %s", result.stdout.strip())
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            logging.warning("pactl get-sink-volume failed")
+        return None
+
+    def set_volume(self, percent: int) -> None:
+        """Set default sink volume to an absolute percentage."""
+        try:
+            subprocess.run(
+                ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"],
+                capture_output=True, timeout=2,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            logging.warning("pactl set-sink-volume failed")
+
+
 class VolumeController:
     """Reduce system volume during recording, restore on stop.
 
-    Uses ``pactl`` to manipulate the default PulseAudio/PipeWire sink volume.
     All calls are best-effort — failures are logged but never break recording.
     Thread-safe: all access to saved state is protected by an internal lock.
 
@@ -2809,7 +2849,8 @@ class VolumeController:
 
     _LOCK_FILENAME = "redictum-volume.json"
 
-    def __init__(self, volume_level: int) -> None:
+    def __init__(self, backend: VolumeBackend, volume_level: int) -> None:
+        self._backend = backend
         self._volume_level = max(0, min(100, volume_level))
         self._lock = threading.Lock()
         self._active = False
@@ -2838,33 +2879,6 @@ class VolumeController:
             return False
         except (PermissionError, OSError):
             return True  # process exists but owned by another user
-
-    @staticmethod
-    def _get_current_volume() -> int | None:
-        """Read current default sink volume percentage via pactl."""
-        try:
-            result = subprocess.run(
-                ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
-                capture_output=True, text=True, timeout=2,
-            )
-            match = re.search(r"(\d+)%", result.stdout)
-            if match:
-                return int(match.group(1))
-            logging.warning("Could not parse sink volume: %s", result.stdout.strip())
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            logging.warning("pactl get-sink-volume failed")
-        return None
-
-    @staticmethod
-    def _set_volume(percent: int) -> None:
-        """Set default sink volume to an absolute percentage."""
-        try:
-            subprocess.run(
-                ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"],
-                capture_output=True, timeout=2,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            logging.warning("pactl set-sink-volume failed")
 
     def _shared_acquire(self, current_volume: int) -> int | None:
         """Register this PID in the shared lock file.
@@ -2991,7 +3005,7 @@ class VolumeController:
         with self._lock:
             if self._active:
                 return
-            current = self._get_current_volume()
+            current = self._backend.get_volume()
             if current is None:
                 return
             original = self._shared_acquire(current)
@@ -2999,7 +3013,7 @@ class VolumeController:
                 return
             target = int(original * self._volume_level / 100)
             self._active = True
-        self._set_volume(target)
+        self._backend.set_volume(target)
         logging.info("Volume reduced to %d%% (was %d%%)", target, original)
 
     def restore(self) -> None:
@@ -3010,7 +3024,7 @@ class VolumeController:
             self._active = False
             volume = self._shared_release()
         if volume is not None:
-            self._set_volume(volume)
+            self._backend.set_volume(volume)
             logging.info("Volume restored to %d%%", volume)
         else:
             logging.info("Volume restore deferred (other instances active)")
@@ -4288,8 +4302,9 @@ class RedictumApp:
         player = PaplayPlayer()
         self._notifier = SoundNotifier(player, volume=self._sound_cfg.get("sound_signal_volume", 30))
         if self._audio_cfg.get("recording_volume_reduce", True):
+            vol_backend = PactlVolumeBackend()
             self._volume_ctl: VolumeController | None = VolumeController(
-                self._audio_cfg.get("recording_volume_level", 30),
+                vol_backend, self._audio_cfg.get("recording_volume_level", 30),
             )
         else:
             self._volume_ctl = None

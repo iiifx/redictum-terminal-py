@@ -122,6 +122,17 @@ redictum-terminal-py/
 6. **Code quality** — PEP 8, type hints everywhere, Google-style docstrings, typed exceptions (no bare `except:`), named constants (no magic numbers), ruff for linting.
 7. **Graceful shutdown** — SIGTERM/SIGINT → stop recording → wait for transcription to finish → remove PID file → exit cleanly.
 
+## Code Quality Rules
+
+1. **Think first, generate second** — AI is a tool, not the author. The human decides what to write, how to structure it, what to test. AI generates; human thinks, reviews, and takes full responsibility.
+2. **Never submit unreviewed code** — every line must be read and understood before commit. "It works" is not enough — the code must be the best solution you can produce for the problem.
+3. **Respect existing code** — existing code contains hidden knowledge (edge cases, non-obvious decisions, battle-tested logic). Never rewrite whole fragments without a clear reason. Understand before changing.
+4. **First draft ≠ final code** — a working draft is proof you understood the problem. Then redesign it properly: simplify, restructure, make it maintainable. Repeat until it's worth a reviewer's time.
+5. **Tests are everything** — code without tests is unfinished code. Tests prove the code works today and protect it tomorrow. Think about what to test and how to structure tests — don't delegate this to AI blindly.
+6. **Simpler is better** — always ask: is there a simpler, faster, or cleaner way? Reject bloated or over-engineered solutions, even if they "work".
+7. **Maintainability over cleverness** — code will be maintained by others (or by you in 6 months). Readability, clarity, and consistency with the existing codebase matter more than novelty.
+8. **No blind delegation** — don't delegate thinking about software design principles to AI. Architecture, structure, error handling strategy, test coverage — these require human judgment.
+
 ## Code Architecture (inside `redictum`)
 | Class | Purpose |
 |-------|---------|
@@ -144,7 +155,9 @@ redictum-terminal-py/
 | `ClipboardBackend` | ABC for clipboard operations (copy, paste, save/restore targets) |
 | `XclipBackend` | X11 clipboard via xclip + xdotool |
 | `ClipboardManager` | Clipboard orchestrator — target filtering, save/restore logic (delegates to backend) |
-| `VolumeController` | System volume save/restore during recording |
+| `VolumeBackend` | ABC for system volume control (get/set) |
+| `PactlVolumeBackend` | PulseAudio/PipeWire volume via pactl |
+| `VolumeController` | Volume orchestrator — multi-instance locking, reduce/restore (delegates to backend) |
 | `SoundPlayerBackend` | ABC for sound playback (play a WAV at a given volume) |
 | `PaplayPlayer` | PulseAudio implementation via paplay |
 | `SoundNotifier` | WAV feedback tones (lazy generation, delegates playback to SoundPlayerBackend) |

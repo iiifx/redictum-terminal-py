@@ -1,4 +1,4 @@
-"""Tests for VolumeController: reduce/restore volume via pactl."""
+"""Tests for VolumeController, VolumeBackend ABC, and PactlVolumeBackend."""
 from __future__ import annotations
 
 import json
@@ -24,8 +24,8 @@ def tmp_lock(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def vc(tmp_lock):
-    from redictum import VolumeController
-    return VolumeController(volume_level=30)
+    from redictum import PactlVolumeBackend, VolumeController
+    return VolumeController(PactlVolumeBackend(), volume_level=30)
 
 
 def _fake_pactl(volume_pct: int = 50):
@@ -40,6 +40,97 @@ def _fake_pactl(volume_pct: int = 50):
         return result
 
     return fake_run, calls
+
+
+# ── VolumeBackend ABC ────────────────────────────────────────────────
+
+
+class TestVolumeBackendABC:
+    """VolumeBackend cannot be instantiated directly."""
+
+    def test_cannot_instantiate(self):
+        from redictum import VolumeBackend
+
+        with pytest.raises(TypeError):
+            VolumeBackend()  # type: ignore[abstract]
+
+    def test_subclass_must_implement_all(self):
+        from redictum import VolumeBackend
+
+        class Incomplete(VolumeBackend):
+            def get_volume(self):
+                return 50
+
+        with pytest.raises(TypeError):
+            Incomplete()  # type: ignore[abstract]
+
+
+# ── PactlVolumeBackend unit tests ────────────────────────────────────
+
+
+class TestPactlVolumeBackend:
+    """PactlVolumeBackend: pactl subprocess management."""
+
+    def test_get_volume_parses_output(self, monkeypatch):
+        from redictum import PactlVolumeBackend
+
+        def fake_run(cmd, **kw):
+            r = MagicMock()
+            r.stdout = "Volume: front-left: 32768 /  75% / -7.50 dB"
+            return r
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = PactlVolumeBackend()
+        assert backend.get_volume() == 75
+
+    def test_get_volume_returns_none_on_failure(self, monkeypatch):
+        from redictum import PactlVolumeBackend
+
+        def fake_run(cmd, **kw):
+            raise FileNotFoundError("pactl")
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = PactlVolumeBackend()
+        assert backend.get_volume() is None
+
+    def test_get_volume_returns_none_on_unparsable(self, monkeypatch):
+        from redictum import PactlVolumeBackend
+
+        def fake_run(cmd, **kw):
+            r = MagicMock()
+            r.stdout = "no volume info"
+            return r
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = PactlVolumeBackend()
+        assert backend.get_volume() is None
+
+    def test_set_volume_calls_pactl(self, monkeypatch):
+        from redictum import PactlVolumeBackend
+
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return MagicMock()
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = PactlVolumeBackend()
+        backend.set_volume(42)
+        assert calls == [["pactl", "set-sink-volume", "@DEFAULT_SINK@", "42%"]]
+
+    def test_set_volume_handles_error(self, monkeypatch):
+        from redictum import PactlVolumeBackend
+
+        def fake_run(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, 2)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = PactlVolumeBackend()
+        backend.set_volume(50)  # no error raised
+
+
+# ── VolumeController integration tests (via PactlVolumeBackend) ──────
 
 
 # -- reduce() ---------------------------------------------------------------
@@ -121,8 +212,8 @@ class TestReduce:
 
     def test_relative_calculation(self, tmp_lock, monkeypatch):
         """Target volume is relative to original: level=30, current=80% -> 24%."""
-        from redictum import VolumeController
-        vc = VolumeController(volume_level=30)
+        from redictum import PactlVolumeBackend, VolumeController
+        vc = VolumeController(PactlVolumeBackend(), volume_level=30)
         fake_run, calls = _fake_pactl(80)
         monkeypatch.setattr("subprocess.run", fake_run)
         vc.reduce()
@@ -130,10 +221,11 @@ class TestReduce:
 
     def test_volume_level_clamped(self):
         """volume_level is clamped to [0, 100]."""
-        from redictum import VolumeController
-        vc_low = VolumeController(volume_level=-10)
+        from redictum import PactlVolumeBackend, VolumeController
+        backend = PactlVolumeBackend()
+        vc_low = VolumeController(backend, volume_level=-10)
         assert vc_low._volume_level == 0
-        vc_high = VolumeController(volume_level=150)
+        vc_high = VolumeController(backend, volume_level=150)
         assert vc_high._volume_level == 100
 
 
@@ -197,10 +289,11 @@ class TestMultiInstance:
 
     def test_second_instance_preserves_original(self, tmp_lock, monkeypatch):
         """Second instance does not overwrite the original volume."""
-        from redictum import VolumeController
-        vc1 = VolumeController(volume_level=30)
+        from redictum import PactlVolumeBackend, VolumeController
+        backend = PactlVolumeBackend()
+        vc1 = VolumeController(backend, volume_level=30)
         vc1._pid = 1001
-        vc2 = VolumeController(volume_level=30)
+        vc2 = VolumeController(backend, volume_level=30)
         vc2._pid = 1002
 
         call_count = [0]
@@ -232,10 +325,11 @@ class TestMultiInstance:
 
     def test_first_restore_defers(self, tmp_lock, monkeypatch):
         """First instance to restore does NOT change volume (others still active)."""
-        from redictum import VolumeController
-        vc1 = VolumeController(volume_level=30)
+        from redictum import PactlVolumeBackend, VolumeController
+        backend = PactlVolumeBackend()
+        vc1 = VolumeController(backend, volume_level=30)
         vc1._pid = 1001
-        vc2 = VolumeController(volume_level=30)
+        vc2 = VolumeController(backend, volume_level=30)
         vc2._pid = 1002
 
         fake_run, calls = _fake_pactl(50)
@@ -256,10 +350,11 @@ class TestMultiInstance:
 
     def test_last_restore_restores_original(self, tmp_lock, monkeypatch):
         """Last instance to restore puts volume back to original."""
-        from redictum import VolumeController
-        vc1 = VolumeController(volume_level=30)
+        from redictum import PactlVolumeBackend, VolumeController
+        backend = PactlVolumeBackend()
+        vc1 = VolumeController(backend, volume_level=30)
         vc1._pid = 1001
-        vc2 = VolumeController(volume_level=30)
+        vc2 = VolumeController(backend, volume_level=30)
         vc2._pid = 1002
 
         fake_run, calls = _fake_pactl(50)
@@ -280,8 +375,8 @@ class TestMultiInstance:
 
     def test_dead_pid_cleanup(self, tmp_lock, monkeypatch):
         """Dead PIDs from crashed instances are cleaned on acquire."""
-        from redictum import VolumeController
-        vc = VolumeController(volume_level=30)
+        from redictum import PactlVolumeBackend, VolumeController
+        vc = VolumeController(PactlVolumeBackend(), volume_level=30)
 
         # Seed lock file with a dead PID
         dead_pid = 99999
@@ -302,8 +397,8 @@ class TestMultiInstance:
 
     def test_corrupted_lock_file(self, tmp_lock, monkeypatch):
         """Corrupted lock file is treated as empty."""
-        from redictum import VolumeController
-        vc = VolumeController(volume_level=30)
+        from redictum import PactlVolumeBackend, VolumeController
+        vc = VolumeController(PactlVolumeBackend(), volume_level=30)
 
         tmp_lock.write_text("not json at all {{{")
 
@@ -323,8 +418,8 @@ class TestThreadSafety:
 
     def test_concurrent_reduce_restore(self, tmp_lock, monkeypatch):
         """8 threads calling reduce()/restore() must not crash."""
-        from redictum import VolumeController
-        vc = VolumeController(volume_level=30)
+        from redictum import PactlVolumeBackend, VolumeController
+        vc = VolumeController(PactlVolumeBackend(), volume_level=30)
 
         fake_run, _ = _fake_pactl(50)
         monkeypatch.setattr("subprocess.run", fake_run)
