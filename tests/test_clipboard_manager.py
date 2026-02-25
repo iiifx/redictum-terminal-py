@@ -1,4 +1,4 @@
-"""Tests for ClipboardManager."""
+"""Tests for ClipboardManager, ClipboardBackend ABC, and XclipBackend."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -8,9 +8,143 @@ import pytest
 
 @pytest.fixture()
 def clipboard():
-    from redictum import ClipboardManager
+    from redictum import ClipboardManager, XclipBackend
 
-    return ClipboardManager()
+    return ClipboardManager(XclipBackend())
+
+
+# ── ClipboardBackend ABC ─────────────────────────────────────────────
+
+
+class TestClipboardBackendABC:
+    """ClipboardBackend cannot be instantiated directly."""
+
+    def test_cannot_instantiate(self):
+        from redictum import ClipboardBackend
+
+        with pytest.raises(TypeError):
+            ClipboardBackend()  # type: ignore[abstract]
+
+    def test_subclass_must_implement_all(self):
+        from redictum import ClipboardBackend
+
+        class Incomplete(ClipboardBackend):
+            def copy(self, text):
+                pass
+
+        with pytest.raises(TypeError):
+            Incomplete()  # type: ignore[abstract]
+
+
+# ── XclipBackend unit tests ──────────────────────────────────────────
+
+
+class TestXclipBackend:
+    """XclipBackend: xclip/xdotool subprocess management."""
+
+    def test_copy_calls_xclip(self, monkeypatch):
+        from redictum import XclipBackend
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = XclipBackend()
+        backend.copy("hello")
+        assert len(calls) == 1
+        assert "xclip" in calls[0][0]
+        assert calls[0][1]["input"] == b"hello"
+
+    def test_paste_calls_xdotool(self, monkeypatch):
+        from redictum import XclipBackend
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        backend = XclipBackend()
+        backend.paste()
+        assert len(calls) == 1
+        assert "xdotool" in calls[0]
+
+    def test_get_targets_returns_list(self, monkeypatch):
+        from redictum import XclipBackend
+
+        def fake_run(cmd, **kwargs):
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = "TARGETS\ntext/plain\nimage/png\n"
+            return r
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = XclipBackend()
+        targets = backend.get_targets()
+        assert targets == ["TARGETS", "text/plain", "image/png"]
+
+    def test_get_targets_empty_on_failure(self, monkeypatch):
+        from redictum import XclipBackend
+
+        def fake_run(cmd, **kwargs):
+            r = MagicMock()
+            r.returncode = 1
+            r.stdout = ""
+            return r
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = XclipBackend()
+        assert backend.get_targets() == []
+
+    def test_save_target_returns_bytes(self, monkeypatch):
+        from redictum import XclipBackend
+
+        def fake_run(cmd, **kwargs):
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = b"raw data"
+            return r
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = XclipBackend()
+        assert backend.save_target("text/plain") == b"raw data"
+
+    def test_save_target_returns_none_on_failure(self, monkeypatch):
+        from redictum import XclipBackend
+
+        def fake_run(cmd, **kwargs):
+            r = MagicMock()
+            r.returncode = 1
+            r.stdout = b""
+            return r
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = XclipBackend()
+        assert backend.save_target("text/plain") is None
+
+    def test_restore_target_calls_xclip(self, monkeypatch):
+        from redictum import XclipBackend
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = XclipBackend()
+        backend.restore_target("text/plain", b"data")
+        assert len(calls) == 1
+        assert "text/plain" in calls[0][0]
+        assert calls[0][1]["input"] == b"data"
+
+
+# ── ClipboardManager integration tests (via XclipBackend) ───────────
 
 
 class TestDetectTarget:
@@ -103,7 +237,7 @@ class TestSaveRestore:
             r.returncode = 0
             call_count[0] += 1
             if call_count[0] == 1:
-                # _detect_target call
+                # get_targets call
                 r.stdout = "TARGETS\ntext/plain\n"
             else:
                 # actual save call

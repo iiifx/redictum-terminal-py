@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Extract `AudioRecorderBackend` ABC from `AudioRecorder`: `arecord` subprocess management moved to `ArecordRecorder`
 - Extract `AudioProcessorBackend` ABC from `AudioProcessor`: `ffmpeg` normalization moved to `FfmpegProcessor`
 - Extract `TranscriberBackend` ABC from `Transcriber`: `whisper-cli` subprocess moved to `WhisperCliTranscriber`
+- Extract `ClipboardBackend` ABC from `ClipboardManager`: `xclip`/`xdotool` subprocess moved to `XclipBackend`
 
 ### Fixed
 - Volume not fully restored when multiple redictum instances run simultaneously

@@ -2616,25 +2616,35 @@ class Transcriber:
         return text
 
 
-class ClipboardManager:
-    """Copy text to clipboard, paste via xdotool, save/restore contents.
+class ClipboardBackend(ABC):
+    """Abstract clipboard — copy, paste, save/restore raw data."""
 
-    Supports saving and restoring text and binary clipboard data (images,
-    file lists) so that the user's clipboard is preserved across paste
-    operations.
-    """
+    @abstractmethod
+    def copy(self, text: str) -> None:
+        """Copy text to clipboard."""
 
-    # X11 protocol targets — not actual data, skip when saving.
-    _SKIP_TARGETS = frozenset({
-        "TARGETS", "MULTIPLE", "SAVE_TARGETS", "TIMESTAMP", "DELETE",
-        "INCR", "INSERT_PROPERTY", "INSERT_SELECTION", "MANAGER",
-    })
+    @abstractmethod
+    def paste(self) -> None:
+        """Simulate paste keystroke."""
 
-    # Target patterns we know how to save and restore.
-    _SUPPORTED_PREFIXES = ("text/", "image/", "UTF8_STRING", "STRING", "TEXT")
+    @abstractmethod
+    def get_targets(self) -> list[str]:
+        """Return available clipboard target MIME types."""
+
+    @abstractmethod
+    def save_target(self, target: str) -> bytes | None:
+        """Read raw clipboard data for *target*."""
+
+    @abstractmethod
+    def restore_target(self, target: str, data: bytes) -> None:
+        """Write raw data to clipboard for *target*."""
+
+
+class XclipBackend(ClipboardBackend):
+    """X11 clipboard via xclip + xdotool."""
 
     def copy(self, text: str) -> None:
-        """Copy text to the system clipboard via xclip."""
+        """Copy text to clipboard via xclip."""
         try:
             result = subprocess.run(
                 ["xclip", "-selection", "clipboard"],
@@ -2651,7 +2661,7 @@ class ClipboardManager:
             logging.warning("xclip copy failed: %s", exc)
 
     def paste(self) -> None:
-        """Simulate Ctrl+V to paste from clipboard."""
+        """Simulate Ctrl+V via xdotool."""
         time.sleep(0.05)
         try:
             result = subprocess.run(
@@ -2667,6 +2677,83 @@ class ClipboardManager:
         except (FileNotFoundError, OSError) as exc:
             logging.warning("xdotool paste failed: %s", exc)
 
+    def get_targets(self) -> list[str]:
+        """Read TARGETS list from xclip."""
+        try:
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode != 0 or not result.stdout:
+                return []
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return []
+        return [line.strip() for line in result.stdout.splitlines()
+                if line.strip()]
+
+    def save_target(self, target: str) -> bytes | None:
+        """Read raw clipboard data for *target* via xclip."""
+        try:
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", target, "-o"],
+                capture_output=True,
+                timeout=5,
+            )
+            if result.returncode != 0 or not result.stdout:
+                logging.warning(
+                    "Clipboard save failed: xclip returned %d",
+                    result.returncode,
+                )
+                return None
+            return result.stdout
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            logging.warning("Clipboard save failed: %s", exc)
+            return None
+
+    def restore_target(self, target: str, data: bytes) -> None:
+        """Write raw data to clipboard for *target* via xclip."""
+        try:
+            subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", target],
+                input=data,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            logging.warning("Clipboard restore failed: %s", exc)
+
+
+class ClipboardManager:
+    """Clipboard orchestrator — copy, paste, save/restore contents.
+
+    Supports saving and restoring text and binary clipboard data (images,
+    file lists) so that the user's clipboard is preserved across paste
+    operations.
+    """
+
+    # X11 protocol targets — not actual data, skip when saving.
+    _SKIP_TARGETS = frozenset({
+        "TARGETS", "MULTIPLE", "SAVE_TARGETS", "TIMESTAMP", "DELETE",
+        "INCR", "INSERT_PROPERTY", "INSERT_SELECTION", "MANAGER",
+    })
+
+    # Target patterns we know how to save and restore.
+    _SUPPORTED_PREFIXES = ("text/", "image/", "UTF8_STRING", "STRING", "TEXT")
+
+    def __init__(self, backend: ClipboardBackend) -> None:
+        self._backend = backend
+
+    def copy(self, text: str) -> None:
+        """Copy text to the system clipboard."""
+        self._backend.copy(text)
+
+    def paste(self) -> None:
+        """Simulate paste keystroke."""
+        self._backend.paste()
+
     def save(self) -> tuple[str, bytes] | None:
         """Save current clipboard contents (target type + raw data).
 
@@ -2677,20 +2764,11 @@ class ClipboardManager:
         target = self._detect_target()
         if target is None:
             return None
-        try:
-            result = subprocess.run(
-                ["xclip", "-selection", "clipboard", "-t", target, "-o"],
-                capture_output=True,
-                timeout=5,
-            )
-            if result.returncode != 0 or not result.stdout:
-                logging.warning("Clipboard save failed: xclip returned %d", result.returncode)
-                return None
-            _rprint(f"  Clipboard saved: {target}, {len(result.stdout)} bytes", level=1)
-            return (target, result.stdout)
-        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            logging.warning("Clipboard save failed: %s", exc)
+        data = self._backend.save_target(target)
+        if data is None:
             return None
+        _rprint(f"  Clipboard saved: {target}, {len(data)} bytes", level=1)
+        return (target, data)
 
     def restore(self, snapshot: tuple[str, bytes]) -> None:
         """Restore previously saved clipboard contents.
@@ -2699,40 +2777,18 @@ class ClipboardManager:
             snapshot: ``(target, data)`` tuple from ``save()``.
         """
         target, data = snapshot
-        try:
-            subprocess.run(
-                ["xclip", "-selection", "clipboard", "-t", target],
-                input=data,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            )
-            _rprint(f"  Clipboard restored: {target}", level=1)
-        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            logging.warning("Clipboard restore failed: %s", exc)
+        self._backend.restore_target(target, data)
+        _rprint(f"  Clipboard restored: {target}", level=1)
 
     def _detect_target(self) -> str | None:
         """Detect the best clipboard target to save.
 
-        Reads the TARGETS list from xclip, filters out X11 internal
+        Reads the targets list from the backend, filters out protocol
         targets, and returns the first supported one (most specific
         format as advertised by the clipboard owner).
         """
-        try:
-            result = subprocess.run(
-                ["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode != 0 or not result.stdout:
-                return None
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return None
-
-        for line in result.stdout.splitlines():
-            target = line.strip()
-            if not target or target in self._SKIP_TARGETS:
+        for target in self._backend.get_targets():
+            if target in self._SKIP_TARGETS:
                 continue
             if any(target.startswith(p) for p in self._SUPPORTED_PREFIXES):
                 return target
@@ -4228,7 +4284,7 @@ class RedictumApp:
         self._transcriber = Transcriber(
             tr_backend, language, prompt=dep.get("whisper_prompt", ""),
         )
-        self._clipboard = ClipboardManager()
+        self._clipboard = ClipboardManager(XclipBackend())
         player = PaplayPlayer()
         self._notifier = SoundNotifier(player, volume=self._sound_cfg.get("sound_signal_volume", 30))
         if self._audio_cfg.get("recording_volume_reduce", True):
