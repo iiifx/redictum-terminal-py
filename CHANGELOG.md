@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Respects `--verbose` (adds device, file size, whisper command, timing) and
   `--quiet` (completely silent, no banner or status output)
 
+### Fixed
+- Volume not fully restored when multiple redictum instances run simultaneously:
+  shared lock file in `XDG_RUNTIME_DIR` tracks original volume and active PIDs,
+  only the last instance to finish restores the original level
+
 ## [1.7.0] - 2026-02-24
 
 ### Changed

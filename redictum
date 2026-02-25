@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import fcntl
 import hashlib
+import json
 import logging
 import math
 import os
@@ -2618,58 +2620,219 @@ class VolumeController:
     Uses ``pactl`` to manipulate the default PulseAudio/PipeWire sink volume.
     All calls are best-effort — failures are logged but never break recording.
     Thread-safe: all access to saved state is protected by an internal lock.
+
+    Multi-instance safe: a shared lock file in ``XDG_RUNTIME_DIR`` tracks the
+    original (pre-reduction) volume and a list of active PIDs.  Only the last
+    instance to finish restores the original volume.
     """
+
+    _LOCK_FILENAME = "redictum-volume.json"
 
     def __init__(self, volume_level: int) -> None:
         self._volume_level = max(0, min(100, volume_level))
         self._lock = threading.Lock()
-        self._saved_volume: str | None = None
+        self._active = False
+        self._pid = os.getpid()
+        self._lock_path = self._resolve_lock_path()
 
-    def reduce(self) -> None:
-        """Save current sink volume, then reduce to configured percentage of it."""
-        with self._lock:
-            if self._saved_volume is not None:
-                return
-            try:
-                result = subprocess.run(
-                    ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
-                    capture_output=True, text=True, timeout=2,
-                )
-                match = re.search(r"(\d+)%", result.stdout)
-                if match:
-                    self._saved_volume = match.group(1) + "%"
-                else:
-                    logging.warning("Could not parse sink volume: %s", result.stdout.strip())
-                    return
-            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-                logging.warning("pactl get-sink-volume failed, skipping volume reduce")
-                return
-            current = int(match.group(1))
-            target = int(current * self._volume_level / 100)
+    @classmethod
+    def _resolve_lock_path(cls) -> Path:
+        """Return path for the shared volume lock file.
+
+        Prefers ``XDG_RUNTIME_DIR`` (per-user tmpfs, mode 0700).
+        Falls back to ``/tmp/redictum-volume-<uid>.json``.
+        """
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+        if runtime_dir and Path(runtime_dir).is_dir():
+            return Path(runtime_dir) / cls._LOCK_FILENAME
+        return Path(f"/tmp/redictum-volume-{os.getuid()}.json")
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        """Check if a process with the given PID is alive."""
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True  # process exists but owned by another user
+
+    @staticmethod
+    def _get_current_volume() -> int | None:
+        """Read current default sink volume percentage via pactl."""
+        try:
+            result = subprocess.run(
+                ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
+                capture_output=True, text=True, timeout=2,
+            )
+            match = re.search(r"(\d+)%", result.stdout)
+            if match:
+                return int(match.group(1))
+            logging.warning("Could not parse sink volume: %s", result.stdout.strip())
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            logging.warning("pactl get-sink-volume failed")
+        return None
+
+    @staticmethod
+    def _set_volume(percent: int) -> None:
+        """Set default sink volume to an absolute percentage."""
         try:
             subprocess.run(
-                ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{target}%"],
+                ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"],
                 capture_output=True, timeout=2,
             )
-            logging.info("Volume reduced to %d%% (was %s)", target, self._saved_volume)
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             logging.warning("pactl set-sink-volume failed")
+
+    def _shared_acquire(self, current_volume: int) -> int | None:
+        """Register this PID in the shared lock file.
+
+        Returns the original (pre-reduction) volume percentage, or None on
+        failure.  The first instance to register saves the current volume as
+        the original.  Subsequent instances reuse that value.  Dead PIDs from
+        crashed instances are cleaned up automatically.
+        """
+        pid = self._pid
+        try:
+            fd = os.open(str(self._lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+        except OSError:
+            logging.warning("Cannot open volume lock file: %s", self._lock_path)
+            return None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            raw = b""
+            while True:
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                raw += chunk
+            data: dict[str, Any] = {}
+            if raw.strip():
+                try:
+                    data = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    data = {}
+            # Clean dead PIDs
+            pids: list[int] = [
+                p for p in data.get("pids", [])
+                if isinstance(p, int) and self._pid_alive(p)
+            ]
+            # Validate stored volume
+            stored = data.get("volume")
+            if not isinstance(stored, int) or stored < 0 or stored > 200:
+                stored = None
+            if pids and stored is not None:
+                original = stored
+            else:
+                original = current_volume
+            if pid not in pids:
+                pids.append(pid)
+            new_data = {"volume": original, "pids": pids}
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.ftruncate(fd, 0)
+            os.write(fd, json.dumps(new_data).encode())
+            return original
+        except OSError:
+            logging.warning("Volume lock acquire failed")
+            return None
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(fd)
+
+    def _shared_release(self) -> int | None:
+        """Unregister this PID from the shared lock file.
+
+        Returns the original volume to restore if this was the last active
+        instance, or None if other instances are still running.
+        """
+        pid = self._pid
+        try:
+            fd = os.open(str(self._lock_path), os.O_RDWR, 0o600)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            logging.warning("Cannot open volume lock file for release")
+            return None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            raw = b""
+            while True:
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                raw += chunk
+            data: dict[str, Any] = {}
+            if raw.strip():
+                try:
+                    data = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    data = {}
+            pids: list[int] = [
+                p for p in data.get("pids", [])
+                if isinstance(p, int) and p != pid and self._pid_alive(p)
+            ]
+            stored = data.get("volume")
+            if not isinstance(stored, int) or stored < 0 or stored > 200:
+                stored = None
+            if not pids:
+                # Last instance — clean up
+                os.ftruncate(fd, 0)
+                try:
+                    self._lock_path.unlink()
+                except OSError:
+                    pass
+                return stored
+            # Other instances still active — update file
+            new_data = {"volume": stored, "pids": pids}
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.ftruncate(fd, 0)
+            os.write(fd, json.dumps(new_data).encode())
+            return None
+        except OSError:
+            logging.warning("Volume lock release failed")
+            return None
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def reduce(self) -> None:
+        """Save current sink volume, then reduce to configured percentage."""
+        with self._lock:
+            if self._active:
+                return
+            current = self._get_current_volume()
+            if current is None:
+                return
+            original = self._shared_acquire(current)
+            if original is None:
+                return
+            target = int(original * self._volume_level / 100)
+            self._active = True
+        self._set_volume(target)
+        logging.info("Volume reduced to %d%% (was %d%%)", target, original)
 
     def restore(self) -> None:
         """Restore previously saved volume. Safe to call multiple times."""
         with self._lock:
-            if self._saved_volume is None:
+            if not self._active:
                 return
-            saved = self._saved_volume
-            self._saved_volume = None
-        try:
-            subprocess.run(
-                ["pactl", "set-sink-volume", "@DEFAULT_SINK@", saved],
-                capture_output=True, timeout=2,
-            )
-            logging.info("Volume restored to %s", saved)
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            logging.warning("pactl set-sink-volume restore failed")
+            self._active = False
+            volume = self._shared_release()
+        if volume is not None:
+            self._set_volume(volume)
+            logging.info("Volume restored to %d%%", volume)
+        else:
+            logging.info("Volume restore deferred (other instances active)")
 
 
 class SoundNotifier:
