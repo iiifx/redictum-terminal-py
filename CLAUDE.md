@@ -161,6 +161,8 @@ redictum-terminal-py/
 | `SoundPlayerBackend` | ABC for sound playback (play a WAV at a given volume) |
 | `PaplayPlayer` | PulseAudio implementation via paplay |
 | `SoundNotifier` | WAV feedback tones (lazy generation, delegates playback to SoundPlayerBackend) |
+| `HttpFetcherBackend` | ABC for HTTP fetching (text + file download) |
+| `CurlWgetFetcher` | curl/wget implementation with auto-fallback |
 | `HotkeyListener` | Push-to-talk via pynput (keyboard + mouse buttons, hold delay, modifier combos, translate mode) |
 | `Housekeeping` | Rotate audio + transcript + log files |
 | `RedictumError` | Base exception class |

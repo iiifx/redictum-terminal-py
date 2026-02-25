@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Extract `TranscriberBackend` ABC from `Transcriber`: `whisper-cli` subprocess moved to `WhisperCliTranscriber`
 - Extract `ClipboardBackend` ABC from `ClipboardManager`: `xclip`/`xdotool` subprocess moved to `XclipBackend`
 - Extract `VolumeBackend` ABC from `VolumeController`: `pactl` subprocess moved to `PactlVolumeBackend`
+- Extract `HttpFetcherBackend` ABC from `RedictumApp`: `curl`/`wget` subprocess moved to `CurlWgetFetcher`
 
 ### Fixed
 - Volume not fully restored when multiple redictum instances run simultaneously

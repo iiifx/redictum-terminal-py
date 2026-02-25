@@ -6,6 +6,114 @@ import subprocess
 
 import pytest
 
+
+# ---------------------------------------------------------------------------
+# HttpFetcherBackend ABC
+# ---------------------------------------------------------------------------
+
+class TestHttpFetcherBackendABC:
+    """HttpFetcherBackend cannot be instantiated directly."""
+
+    def test_cannot_instantiate(self):
+        from redictum import HttpFetcherBackend
+
+        with pytest.raises(TypeError):
+            HttpFetcherBackend()  # type: ignore[abstract]
+
+    def test_subclass_must_implement_all(self):
+        from redictum import HttpFetcherBackend
+
+        class Incomplete(HttpFetcherBackend):
+            def fetch_text(self, url, timeout=10):
+                return ""
+
+        with pytest.raises(TypeError):
+            Incomplete()  # type: ignore[abstract]
+
+
+# ---------------------------------------------------------------------------
+# CurlWgetFetcher
+# ---------------------------------------------------------------------------
+
+class TestCurlWgetFetcher:
+    """CurlWgetFetcher: curl/wget subprocess management."""
+
+    def test_fetch_text_with_curl(self, monkeypatch):
+        from redictum import CurlWgetFetcher
+
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl" if x == "curl" else None)
+        fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="hello", stderr="")
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
+
+        fetcher = CurlWgetFetcher()
+        assert fetcher.fetch_text("http://example.com") == "hello"
+
+    def test_fetch_text_with_wget_fallback(self, monkeypatch):
+        from redictum import CurlWgetFetcher
+
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/wget" if x == "wget" else None)
+        fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="hello", stderr="")
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
+
+        fetcher = CurlWgetFetcher()
+        assert fetcher.fetch_text("http://example.com") == "hello"
+
+    def test_fetch_text_no_tool_raises(self, monkeypatch):
+        from redictum import CurlWgetFetcher, RedictumError
+
+        monkeypatch.setattr("shutil.which", lambda x: None)
+        fetcher = CurlWgetFetcher()
+        with pytest.raises(RedictumError, match="Neither curl nor wget"):
+            fetcher.fetch_text("http://example.com")
+
+    def test_fetch_text_timeout_raises(self, monkeypatch):
+        from redictum import CurlWgetFetcher, RedictumError
+
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl")
+
+        def fake_run(*a, **kw):
+            raise subprocess.TimeoutExpired("curl", 10)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        fetcher = CurlWgetFetcher()
+        with pytest.raises(RedictumError, match="timed out"):
+            fetcher.fetch_text("http://example.com")
+
+    def test_download_to_file_with_curl(self, tmp_path, monkeypatch):
+        from redictum import CurlWgetFetcher
+
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl" if x == "curl" else None)
+        dest = tmp_path / "out.bin"
+
+        def fake_run(cmd, **kw):
+            dest.write_bytes(b"data")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        fetcher = CurlWgetFetcher()
+        fetcher.download_to_file("http://example.com/f", dest)
+        assert dest.exists()
+
+    def test_download_to_file_no_tool_raises(self, tmp_path, monkeypatch):
+        from redictum import CurlWgetFetcher, RedictumError
+
+        monkeypatch.setattr("shutil.which", lambda x: None)
+        fetcher = CurlWgetFetcher()
+        with pytest.raises(RedictumError, match="Neither curl nor wget"):
+            fetcher.download_to_file("http://example.com/f", tmp_path / "out.bin")
+
+    def test_download_to_file_failure_raises(self, tmp_path, monkeypatch):
+        from redictum import CurlWgetFetcher, RedictumError
+
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl")
+        fake_result = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
+
+        fetcher = CurlWgetFetcher()
+        with pytest.raises(RedictumError, match="Failed to download"):
+            fetcher.download_to_file("http://example.com/f", tmp_path / "out.bin")
+
+
 # ---------------------------------------------------------------------------
 # _compare_versions
 # ---------------------------------------------------------------------------
@@ -143,7 +251,7 @@ class TestFetchLatestVersion:
         monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl")
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
 
-        with pytest.raises(RedictumError, match="Failed to check"):
+        with pytest.raises(RedictumError, match="failed"):
             app._fetch_latest_version()
 
     def test_timeout(self, app, monkeypatch):
@@ -155,7 +263,7 @@ class TestFetchLatestVersion:
         monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl")
         monkeypatch.setattr("subprocess.run", fake_run)
 
-        with pytest.raises(RedictumError, match="Timed out"):
+        with pytest.raises(RedictumError, match="timed out"):
             app._fetch_latest_version()
 
 

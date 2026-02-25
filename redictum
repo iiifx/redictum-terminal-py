@@ -3596,6 +3596,74 @@ def _capture_hotkey() -> tuple[Any, frozenset[Any]]:
     return result[0]
 
 
+class HttpFetcherBackend(ABC):
+    """Abstract HTTP fetcher — download text and files."""
+
+    @abstractmethod
+    def fetch_text(self, url: str, timeout: int = 10) -> str:
+        """Fetch *url* and return response body as text.
+
+        Raises:
+            RedictumError: On network failure or timeout.
+        """
+
+    @abstractmethod
+    def download_to_file(self, url: str, dest: Path, timeout: int = 120) -> None:
+        """Download *url* to *dest* file.
+
+        Raises:
+            RedictumError: On download failure or timeout.
+        """
+
+
+class CurlWgetFetcher(HttpFetcherBackend):
+    """HTTP fetcher via curl (preferred) or wget (fallback)."""
+
+    def fetch_text(self, url: str, timeout: int = 10) -> str:
+        """Fetch *url* as text via curl or wget."""
+        if shutil.which("curl"):
+            cmd = ["curl", "-fsSL", "-m", str(timeout), url]
+        elif shutil.which("wget"):
+            cmd = ["wget", "-q", "-O", "-", f"--timeout={timeout}", url]
+        else:
+            raise RedictumError(
+                "Neither curl nor wget found. Cannot fetch URL.",
+            )
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=timeout + 5,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RedictumError("HTTP request timed out.") from exc
+        if result.returncode != 0:
+            raise RedictumError(
+                f"HTTP request failed (exit {result.returncode}).",
+            )
+        return result.stdout
+
+    def download_to_file(self, url: str, dest: Path, timeout: int = 120) -> None:
+        """Download *url* to *dest* via curl or wget."""
+        dest_str = str(dest)
+        if shutil.which("curl"):
+            cmd = ["curl", "-fsSL", "-m", str(timeout), "-o", dest_str, url]
+        elif shutil.which("wget"):
+            cmd = ["wget", "-q", "-O", dest_str, f"--timeout={timeout}", url]
+        else:
+            raise RedictumError(
+                "Neither curl nor wget found. Cannot download file.",
+            )
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=timeout + 5,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RedictumError("Download timed out.") from exc
+        if result.returncode != 0 or not dest.exists():
+            raise RedictumError(f"Failed to download {url}")
+
+
 # ---------------------------------------------------------------------------
 # RedictumApp — orchestrator
 # ---------------------------------------------------------------------------
@@ -3612,6 +3680,7 @@ class RedictumApp:
         self._state_mgr = StateManager(script_dir)
         self._config: dict[str, Any] = {}
         self._overrides = overrides or []
+        self._fetcher: HttpFetcherBackend = CurlWgetFetcher()
 
     def _make_log_path(self, label: str = "") -> Path:
         """Build a log file path with optional label in the name.
@@ -4104,30 +4173,10 @@ class RedictumApp:
             RedictumError: On network/parse failure.
         """
         _rprint(f"  Update: checking {GITHUB_API_LATEST}", level=1)
-        timeout = UPDATE_API_TIMEOUT
-        if shutil.which("curl"):
-            cmd = ["curl", "-fsSL", "-m", str(timeout), GITHUB_API_LATEST]
-        elif shutil.which("wget"):
-            cmd = ["wget", "-q", "-O", "-", f"--timeout={timeout}", GITHUB_API_LATEST]
-        else:
-            raise RedictumError("Neither curl nor wget found. Cannot check for updates.")
+        body = self._fetcher.fetch_text(GITHUB_API_LATEST, timeout=UPDATE_API_TIMEOUT)
 
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=timeout + 5,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RedictumError("Timed out checking for updates. Try again later.") from exc
-
-        if result.returncode != 0:
-            raise RedictumError(
-                f"Failed to check for updates (exit {result.returncode}). "
-                "Check your internet connection."
-            )
-
-        try:
-            data = json.loads(result.stdout)
+            data = json.loads(body)
             tag = data["tag_name"]
         except (ValueError, KeyError) as exc:
             raise RedictumError("Unexpected response from GitHub API.") from exc
@@ -4138,30 +4187,13 @@ class RedictumApp:
         return tag.lstrip("v"), data.get("body") or ""
 
     def _download_to_file(self, url: str, dest: Path, timeout: int) -> None:
-        """Download *url* to *dest* file using curl or wget.
+        """Download *url* to *dest* file.
 
         Raises:
             RedictumError: On download failure.
         """
         _rprint(f"  Download: {url}", level=1)
-        dest_str = str(dest)
-        if shutil.which("curl"):
-            cmd = ["curl", "-fsSL", "-m", str(timeout), "-o", dest_str, url]
-        elif shutil.which("wget"):
-            cmd = ["wget", "-q", "-O", dest_str, f"--timeout={timeout}", url]
-        else:
-            raise RedictumError("Neither curl nor wget found. Cannot download update.")
-
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=timeout + 5,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RedictumError("Download timed out. Try again later.") from exc
-
-        if result.returncode != 0 or not dest.exists():
-            raise RedictumError(f"Failed to download {url}")
+        self._fetcher.download_to_file(url, dest, timeout=timeout)
 
     def run_update(self) -> int:
         """Check for updates and replace the script in-place.
