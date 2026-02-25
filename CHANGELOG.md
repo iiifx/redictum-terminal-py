@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Live console output in interactive mode: real-time status messages during
+  the recording → processing → transcription pipeline (Recording, Processing,
+  transcribed text, silence/empty/error states)
+- Respects `--verbose` (adds device, file size, whisper command, timing) and
+  `--quiet` (completely silent, no banner or status output)
+
 ## [1.7.0] - 2026-02-24
 
 ### Changed

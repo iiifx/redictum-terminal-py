@@ -3688,12 +3688,15 @@ class RedictumApp:
                 self._state = STATE_IDLE
             logging.exception("Failed to start recording")
             self._notifier.play_error()
+            _rprint("[red]\u2717 Recording failed[/red]")
             return
         if self._sound_cfg.get("sound_signal_start", True):
             self._notifier.play_start()
         if self._volume_ctl:
             time.sleep(0.15)
             self._volume_ctl.reduce()
+        _rprint("")
+        _rprint("[bold]\u25cf Recording...[/bold]")
         _rprint(f"  Recording: device={self._audio_cfg['recording_device']}", level=1)
         logging.info("Recording started (mode: %s)", mode)
 
@@ -3724,8 +3727,10 @@ class RedictumApp:
                 logging.warning("Recording produced no audio")
                 if self._sound_cfg.get("sound_signal_error", True):
                     self._notifier.play_error()
+                _rprint("[red]\u2717 Empty recording, skipped[/red]")
                 return
 
+            _rprint("[dim]\u27f3 Processing...[/dim]")
             _rprint(f"  Audio: {audio_path.name} ({audio_path.stat().st_size} bytes)", level=1)
 
             # Silence detection (before normalize — loudnorm amplifies noise)
@@ -3735,6 +3740,7 @@ class RedictumApp:
                 )
                 if not self._processor.has_speech(audio_path, threshold=threshold):
                     logging.info("Silence detected, skipping transcription")
+                    _rprint("[dim]\u2014 Silence, skipped[/dim]")
                     return
 
             # Normalize
@@ -3751,6 +3757,7 @@ class RedictumApp:
             )
             if not text:
                 logging.info("Transcription returned empty text")
+                _rprint("[dim]\u2014 Empty transcription[/dim]")
                 return
 
             logging.info("Transcribed (mode: %s): %d chars", mode, len(text))
@@ -3778,20 +3785,25 @@ class RedictumApp:
             else:
                 self._clipboard.copy(final_text)
 
+            _rprint(f"[green]\u2713[/green] \"{final_text.strip()}\"")
+            _rprint(f"  Transcribed: {mode}, {len(text)} chars", level=1)
+
             if self._sound_cfg.get("sound_signal_done", True):
                 self._notifier.play_stop()
             self._housekeeper.rotate_audio()
             self._housekeeper.rotate_transcripts()
             self._housekeeper.rotate_logs()
             logging.info("Pipeline complete, state -> idle")
-        except RedictumError:
+        except RedictumError as exc:
             logging.exception("Pipeline error")
             if self._sound_cfg.get("sound_signal_error", True):
                 self._notifier.play_error()
+            _rprint(f"[red]\u2717 {exc}[/red]")
         except Exception:
             logging.exception("Unexpected pipeline error")
             if self._sound_cfg.get("sound_signal_error", True):
                 self._notifier.play_error()
+            _rprint("[red]\u2717 Unexpected error[/red]")
         finally:
             if self._volume_ctl:
                 self._volume_ctl.restore()
