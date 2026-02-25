@@ -132,7 +132,9 @@ redictum-terminal-py/
 | `Diagnostics` | Check external dependencies, auto-install (apt/pip) |
 | `WhisperInstaller` | Download tarball, build whisper.cpp, download models, CUDA support |
 | `Daemon` | PID file, double-fork daemon, signal handling |
-| `AudioRecorder` | Record via arecord (start/stop/cancel) |
+| `AudioRecorderBackend` | ABC for audio recording (start/stop/cancel lifecycle) |
+| `ArecordRecorder` | ALSA arecord implementation via subprocess |
+| `AudioRecorder` | Recording orchestrator — filenames, validation, logging (delegates to backend) |
 | `AudioProcessor` | Normalize via ffmpeg loudnorm |
 | `Transcriber` | Transcribe via whisper-cli (--translate for English, language-aware prompts) |
 | `ClipboardManager` | xclip copy/paste + universal save/restore (text, images, binary via X11 TARGETS) |

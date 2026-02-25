@@ -2089,19 +2089,34 @@ class Daemon:
         return self._stop_event
 
 
-class AudioRecorder:
-    """Record microphone audio via arecord."""
+class AudioRecorderBackend(ABC):
+    """Abstract audio recorder — manage a recording subprocess."""
 
-    def __init__(self, output_dir: Path, device: str) -> None:
-        self._output_dir = output_dir
+    @abstractmethod
+    def start(self, output_path: Path) -> None:
+        """Start recording audio to *output_path*."""
+
+    @abstractmethod
+    def stop(self) -> int | None:
+        """Stop recording. Return process exit code, or None if not started."""
+
+    @abstractmethod
+    def cancel(self) -> None:
+        """Terminate recording immediately (discard)."""
+
+
+class ArecordRecorder(AudioRecorderBackend):
+    """ALSA arecord implementation."""
+
+    STOP_TIMEOUT = 5
+    CANCEL_TIMEOUT = 2
+
+    def __init__(self, device: str) -> None:
         self._device = device
         self._process: subprocess.Popen[bytes] | None = None
-        self._current_file: Path | None = None
 
-    def start(self) -> None:
-        """Begin recording audio to a timestamped WAV file."""
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._current_file = self._output_dir / f"rec_{ts}.wav"
+    def start(self, output_path: Path) -> None:
+        """Start recording audio to *output_path* via arecord."""
         self._process = subprocess.Popen(
             [
                 "arecord",
@@ -2110,11 +2125,53 @@ class AudioRecorder:
                 "-r", str(AUDIO_SAMPLE_RATE),
                 "-c", str(AUDIO_CHANNELS),
                 "-t", "wav",
-                str(self._current_file),
+                str(output_path),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    def stop(self) -> int | None:
+        """Stop recording. Return process exit code, or None if not started."""
+        if self._process is None:
+            return None
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=self.STOP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait()
+            logging.warning("arecord did not stop gracefully, killed")
+        rc = self._process.returncode
+        self._process = None
+        return rc
+
+    def cancel(self) -> None:
+        """Terminate recording immediately (discard)."""
+        if self._process is None:
+            return
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=self.CANCEL_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait()
+        self._process = None
+
+
+class AudioRecorder:
+    """Record microphone audio — platform-independent orchestrator."""
+
+    def __init__(self, output_dir: Path, backend: AudioRecorderBackend) -> None:
+        self._output_dir = output_dir
+        self._backend = backend
+        self._current_file: Path | None = None
+
+    def start(self) -> None:
+        """Begin recording audio to a timestamped WAV file."""
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._current_file = self._output_dir / f"rec_{ts}.wav"
+        self._backend.start(self._current_file)
         logging.info("Recording started: %s", self._current_file.name)
 
     def stop(self) -> Path | None:
@@ -2123,20 +2180,12 @@ class AudioRecorder:
         Returns:
             Path to the recorded WAV file, or None on failure.
         """
-        if self._process is None:
+        rc = self._backend.stop()
+        if rc is None:
             return None
-        self._process.terminate()
-        try:
-            self._process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self._process.kill()
-            self._process.wait()
-            logging.warning("arecord did not stop gracefully, killed")
-        rc = self._process.returncode
         # arecord returns 1 or -15 (SIGTERM) when we terminate it — expected.
         if rc not in (0, 1, -signal.SIGTERM):
             logging.error("arecord exited with code %d", rc)
-        self._process = None
 
         path = self._current_file
         self._current_file = None
@@ -2150,14 +2199,7 @@ class AudioRecorder:
 
     def cancel(self) -> None:
         """Terminate recording and delete the file. For graceful shutdown."""
-        if self._process is not None:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-                self._process.wait()
-            self._process = None
+        self._backend.cancel()
         if self._current_file and self._current_file.exists():
             self._current_file.unlink()
             self._current_file = None
@@ -4102,7 +4144,8 @@ class RedictumApp:
             _rprint(f"  Config: hotkey={cfg['input']['hotkey_key']}", level=1)
 
         # Build pipeline components
-        self._recorder = AudioRecorder(audio_dir, self._audio_cfg["recording_device"])
+        rec_backend = ArecordRecorder(self._audio_cfg["recording_device"])
+        self._recorder = AudioRecorder(audio_dir, rec_backend)
         self._processor = AudioProcessor()
         self._transcriber = Transcriber(
             dep["whisper_cli"],
