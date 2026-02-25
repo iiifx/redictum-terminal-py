@@ -2963,6 +2963,17 @@ class HotkeyListener:
         "shift": ("shift_l", "shift_r"),
     }
 
+    # Mouse button config names → pynput Button attribute names.
+    # left and right are intentionally excluded.
+    _MOUSE_MAP: dict[str, str] = {
+        "mouse_middle":  "middle",
+        "mouse_back":    "button8",
+        "mouse_forward": "button9",
+    }
+
+    # For button8–button30, also accept generic "mouse_button8" etc.
+    _MOUSE_GENERIC_PREFIX = "mouse_button"
+
     def __init__(self, hotkey: str, hold_delay: float, translate_key: str = "") -> None:
         self._hotkey = hotkey
         self._translate_key = translate_key
@@ -2974,6 +2985,7 @@ class HotkeyListener:
         self._held_mods: set[Any] = set()
         self._all_mod_keys: frozenset[Any] = frozenset()
         self._listener: Any = None
+        self._mouse_listener: Any = None
         self._hold_timer: threading.Timer | None = None
         self._is_holding = False
         self._pending_mode: str = "transcribe"
@@ -2988,7 +3000,9 @@ class HotkeyListener:
                      is held longer than hold_delay.
             on_release: Called with mode when key is released after hold.
         """
-        from pynput.keyboard import Key, Listener
+        from pynput.keyboard import Key
+        from pynput.keyboard import Listener as KBListener
+        from pynput.mouse import Listener as MouseListener
 
         self._on_hold = on_hold
         self._on_release = on_release
@@ -3003,11 +3017,17 @@ class HotkeyListener:
                 if hasattr(Key, name):
                     all_mods.add(getattr(Key, name))
         self._all_mod_keys = frozenset(all_mods)
-        self._listener = Listener(
+        self._listener = KBListener(
             on_press=self._on_press,
             on_release=self._on_key_release,
         )
         self._listener.start()
+        # Start mouse listener only if any target is a mouse button
+        if self._needs_mouse():
+            self._mouse_listener = MouseListener(
+                on_click=self._on_mouse_click,
+            )
+            self._mouse_listener.start()
         logging.info(
             "Hotkey listener started: %s (hold %.1fs), translate: %s",
             self._hotkey, self._hold_delay, self._translate_key or "disabled",
@@ -3021,6 +3041,9 @@ class HotkeyListener:
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
+        if self._mouse_listener is not None:
+            self._mouse_listener.stop()
+            self._mouse_listener = None
 
     def _on_press(self, key: Any) -> None:
         """Handle key press: track modifiers and start hold timer."""
@@ -3058,6 +3081,37 @@ class HotkeyListener:
             self._is_holding = False
             if self._on_release:
                 self._on_release(self._pending_mode)
+
+    def _on_mouse_click(self, _x: int, _y: int, button: Any, pressed: bool) -> None:
+        """Handle mouse click: delegate to press/release as if keyboard."""
+        if pressed:
+            mode = self._resolve_mode(button)
+            if mode is None:
+                return
+            if self._is_holding or self._hold_timer is not None:
+                return
+            self._pending_mode = mode
+            self._hold_timer = threading.Timer(self._hold_delay, self._fire_hold)
+            self._hold_timer.daemon = True
+            self._hold_timer.start()
+        else:
+            if not (button == self._target_key or button == self._translate_target_key):
+                return
+            if self._hold_timer is not None:
+                self._hold_timer.cancel()
+                self._hold_timer = None
+            if self._is_holding:
+                self._is_holding = False
+                if self._on_release:
+                    self._on_release(self._pending_mode)
+
+    def _needs_mouse(self) -> bool:
+        """Return True if any configured hotkey uses a mouse button."""
+        from pynput.mouse import Button
+        for key in (self._target_key, self._translate_target_key):
+            if isinstance(key, Button):
+                return True
+        return False
 
     def _resolve_mode(self, key: Any) -> str | None:
         """Determine mode from pressed key + held modifiers.
@@ -3105,13 +3159,28 @@ class HotkeyListener:
 
     @classmethod
     def _parse_key(cls, hotkey: str) -> Any:
-        """Parse a hotkey string into a pynput Key or KeyCode.
+        """Parse a hotkey string into a pynput Key, KeyCode, or mouse Button.
 
-        Supports: "Insert", "F1"-"F20", single characters ("a", "b"), etc.
+        Supports: "Insert", "F1"-"F20", single characters ("a", "b"),
+        mouse buttons ("mouse_middle", "mouse_back", "mouse_forward",
+        "mouse_button8"-"mouse_button30").
         """
         from pynput.keyboard import Key, KeyCode
+        from pynput.mouse import Button
 
         normalized = hotkey.strip().lower()
+
+        # Mouse buttons: named aliases
+        if normalized in cls._MOUSE_MAP:
+            return getattr(Button, cls._MOUSE_MAP[normalized])
+
+        # Mouse buttons: generic mouse_button<N>
+        if normalized.startswith(cls._MOUSE_GENERIC_PREFIX):
+            suffix = normalized[len(cls._MOUSE_GENERIC_PREFIX):]
+            if suffix.isdigit():
+                attr = f"button{suffix}"
+                if hasattr(Button, attr):
+                    return getattr(Button, attr)
 
         # Function keys: f1-f20
         if normalized.startswith("f") and normalized[1:].isdigit():
@@ -3128,6 +3197,57 @@ class HotkeyListener:
             return KeyCode.from_char(hotkey.strip())
 
         raise RedictumError(f"Unknown hotkey: '{hotkey}'")
+
+    @classmethod
+    def _key_to_str(cls, key: Any) -> str:
+        """Convert a pynput Key, KeyCode, or mouse Button to config string.
+
+        Inverse of :meth:`_parse_key`.
+        """
+        from pynput.keyboard import Key, KeyCode
+        from pynput.mouse import Button
+
+        # Mouse buttons
+        if isinstance(key, Button):
+            # Check named aliases first (reverse _MOUSE_MAP)
+            reverse = {v: k for k, v in cls._MOUSE_MAP.items()}
+            if key.name in reverse:
+                return reverse[key.name]
+            # Generic: button8 → mouse_button8, middle → mouse_middle
+            return f"mouse_{key.name}"
+
+        # Named keyboard keys (reverse _KEY_MAP)
+        if isinstance(key, Key):
+            # Prefer canonical name (e.g. "Insert" over "insert")
+            reverse_key = {v: k for k, v in cls._KEY_MAP.items()}
+            attr = key.name  # e.g. "insert", "f1", "esc"
+            if attr in reverse_key:
+                name = reverse_key[attr]
+                return name.capitalize() if len(name) > 1 else name
+            # Function keys: f1–f20
+            if attr.startswith("f") and attr[1:].isdigit():
+                return attr.upper()
+            return attr.capitalize()
+
+        # KeyCode (single character)
+        if isinstance(key, KeyCode) and key.char is not None:
+            return key.char
+
+        return str(key)
+
+    @classmethod
+    def _combo_to_str(cls, key: Any, mods: frozenset[Any]) -> str:
+        """Convert a trigger key + modifier set to config string like 'ctrl+Insert'."""
+        from pynput.keyboard import Key
+        parts: list[str] = []
+        for mod_name, key_names in cls._MODIFIER_MAP.items():
+            group = frozenset(
+                getattr(Key, n) for n in key_names if hasattr(Key, n)
+            )
+            if mods & group:
+                parts.append(mod_name)
+        parts.append(cls._key_to_str(key))
+        return "+".join(parts)
 
 
 class Housekeeping:
@@ -3193,6 +3313,82 @@ def _log_transcript(transcripts_dir: Path, text: str) -> None:
     timestamp = datetime.now().strftime("%H:%M:%S")
     with open(log_file, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {text}\n")
+
+
+# ---------------------------------------------------------------------------
+# One-shot hotkey capture
+# ---------------------------------------------------------------------------
+
+def _capture_hotkey() -> tuple[Any, frozenset[Any]]:
+    """Capture a single hotkey combo (keyboard or mouse) from user input.
+
+    Blocks until the user presses and releases a non-modifier key or an
+    eligible mouse button.  Modifiers (ctrl/alt/shift) held during the
+    press are tracked.  Left and right mouse buttons are ignored.
+
+    Returns:
+        Tuple of (trigger key/button, frozenset of modifier Key objects).
+
+    Raises:
+        KeyboardInterrupt: When user presses Ctrl+C.
+    """
+    from pynput.keyboard import Key
+    from pynput.keyboard import Listener as KBListener
+    from pynput.mouse import Button
+    from pynput.mouse import Listener as MouseListener
+
+    result: list[tuple[Any, frozenset[Any]]] = []
+    held_mods: set[Any] = set()
+    done = threading.Event()
+
+    # Build all-mods set
+    all_mods: set[Any] = set()
+    for key_names in HotkeyListener._MODIFIER_MAP.values():
+        for name in key_names:
+            if hasattr(Key, name):
+                all_mods.add(getattr(Key, name))
+    all_mods_frozen = frozenset(all_mods)
+
+    ignored_buttons = frozenset({Button.left, Button.right,
+                                 Button.scroll_up, Button.scroll_down,
+                                 Button.scroll_left, Button.scroll_right})
+
+    def on_press(key: Any) -> None:
+        if key in all_mods_frozen:
+            held_mods.add(key)
+            return
+        # Non-modifier key pressed — capture and signal
+        result.append((key, frozenset(held_mods)))
+        done.set()
+
+    def on_release(key: Any) -> None:
+        if key in all_mods_frozen:
+            held_mods.discard(key)
+
+    def on_click(_x: int, _y: int, button: Any, pressed: bool) -> None:
+        if not pressed:
+            return
+        if button in ignored_buttons:
+            return
+        result.append((button, frozenset(held_mods)))
+        done.set()
+
+    kb = KBListener(on_press=on_press, on_release=on_release)
+    mouse = MouseListener(on_click=on_click)
+    kb.start()
+    mouse.start()
+
+    try:
+        # Block until capture; KeyboardInterrupt breaks out
+        while not done.is_set():
+            done.wait(timeout=0.2)
+    finally:
+        kb.stop()
+        mouse.stop()
+
+    if not result:
+        raise KeyboardInterrupt
+    return result[0]
 
 
 # ---------------------------------------------------------------------------
@@ -3608,6 +3804,87 @@ class RedictumApp:
             return EXIT_OK
 
         logging.info("Language saved: %s", lang)
+        return EXIT_OK
+
+    # -- Hotkey reassignment --------------------------------------------------
+
+    def run_hotkey(self) -> int:
+        """Change push-to-talk hotkey via interactive capture.
+
+        Returns:
+            Exit code.
+        """
+        self._log_path = self._make_log_path("hotkey")
+        setup_logging(self._log_path, verbose=(_verbosity > 0))
+        logging.info("Subcommand: hotkey")
+        self._config = self._load_config()
+
+        if _verbosity < 0:
+            _rprint("Hotkey change requires interactive mode.", level=-1)
+            return EXIT_ERROR
+
+        cfg_input = self._config["input"]
+        record_key = cfg_input["hotkey_key"]
+        translate_key = cfg_input.get("hotkey_translate_key", "")
+
+        _rprint("\n  Current hotkeys:")
+        _rprint(f"    1. Record:    [cyan]{record_key}[/cyan]")
+        _rprint(f"    2. Translate: [cyan]{translate_key or '(disabled)'}[/cyan]")
+        _rprint("")
+
+        try:
+            choice = input("  Which hotkey to change? [1/2, Enter=cancel]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            _rprint("")
+            return EXIT_OK
+
+        if choice == "1":
+            config_key = "hotkey_key"
+            label = "Record"
+            other_combo = translate_key
+        elif choice == "2":
+            config_key = "hotkey_translate_key"
+            label = "Translate"
+            other_combo = record_key
+        else:
+            return EXIT_OK
+
+        _rprint(f"\n  Press the new hotkey for [cyan]{label}[/cyan]...")
+
+        try:
+            trigger, mods = _capture_hotkey()
+        except KeyboardInterrupt:
+            _rprint("\n  Cancelled.")
+            return EXIT_OK
+
+        new_combo = HotkeyListener._combo_to_str(trigger, mods)
+
+        # Round-trip validation: ensure the combo can be re-parsed
+        try:
+            HotkeyListener._parse_combo(new_combo)
+        except RedictumError:
+            _rprint(f"  [red]Unsupported key: {new_combo}[/red]")
+            return EXIT_ERROR
+
+        _rprint(f"  Captured: [green]{new_combo}[/green]")
+
+        # Conflict check
+        if other_combo and new_combo.lower() == other_combo.lower():
+            _rprint(f"  [red]Conflicts with the other hotkey ({other_combo}). Choose a different key.[/red]")
+            return EXIT_ERROR
+
+        if not _confirm(f"  Save '{new_combo}' as {label} hotkey?", default=True):
+            return EXIT_OK
+
+        self._config_mgr.update({config_key: new_combo})
+        _rprint(f"  [green]Saved.[/green]")
+        logging.info("Hotkey %s changed to: %s", label, new_combo)
+
+        # Daemon notice
+        daemon = Daemon(self._pid_path, self._log_path)
+        if daemon.status() is not None:
+            _rprint("\n  [yellow]Daemon is running. Restart it for changes to take effect.[/yellow]")
+
         return EXIT_OK
 
     # -- Self-update ----------------------------------------------------------
@@ -4133,6 +4410,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("whisper", help="Setup whisper.cpp (install, check, reconfigure)")
     sub.add_parser("language", help="Change transcription language")
     sub.add_parser("update", help="Update to the latest version")
+    sub.add_parser("hotkey", help="Change push-to-talk hotkey")
 
     return parser
 
@@ -4184,6 +4462,8 @@ def main() -> int:
             return app.run_language()
         if args.command == "update":
             return app.run_update()
+        if args.command == "hotkey":
+            return app.run_hotkey()
     except RedictumError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_ERROR

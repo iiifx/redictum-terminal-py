@@ -596,6 +596,16 @@ test_18_quiet_start_stop() {
     fi
 }
 
+# T19: Hotkey command — EOF at prompt cancels gracefully
+test_19_hotkey_eof_cancel() {
+    prepare_env
+    local output
+    output=$(python3 "$SCRIPT" hotkey </dev/null 2>&1)
+    local rc=$?
+    assert_exit_ok $rc || return 1
+    assert_contains "$output" "Record" || return 1
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -634,6 +644,7 @@ run_test "T15 Update: daemon running" test_15_update_daemon_running
 run_test "T16 Update: EOF decline" test_16_update_user_declines_eof
 run_test "T17 Quiet first-run"   test_17_quiet_first_run
 run_test "T18 Quiet start/stop"  test_18_quiet_start_stop
+run_test "T19 Hotkey: EOF cancel" test_19_hotkey_eof_cancel
 
 # Summary
 echo -e "\n${BOLD}==============================${NC}"

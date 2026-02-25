@@ -52,11 +52,9 @@ On first run, the script will:
 - **Daemon mode** — runs in background, start/stop/status commands
 - **Sound feedback** — distinct tones for recording, processing, done, error
 - **Auto-setup** — installs dependencies, builds whisper.cpp, downloads models
-- **Language selector** — auto-detects from locale; `./redictum language` wizard to change anytime
-- **Audio normalization** — ffmpeg loudnorm for consistent transcription quality (optional)
-- **Silence detection** — skips whisper on silent recordings to prevent hallucinations
-- **File rotation** — automatic cleanup of old audio and transcript files
-- **INI config** — fully configurable with comments, generated on first run (zero external dependencies)
+- **Language detection** — auto-detects from system locale
+- **Audio normalization** — consistent transcription quality via ffmpeg loudnorm
+- **Silence detection** — skips silent recordings to prevent hallucinations
 
 ## Usage
 
@@ -73,6 +71,7 @@ On first run, the script will:
 ~/redictum/redictum setup      # re-run optional dependency setup
 ~/redictum/redictum whisper    # install/reconfigure whisper.cpp
 ~/redictum/redictum language   # change transcription language
+~/redictum/redictum hotkey     # change push-to-talk hotkey
 ~/redictum/redictum update     # check for updates and update in-place
 ```
 

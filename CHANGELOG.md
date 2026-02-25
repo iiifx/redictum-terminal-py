@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Live console output in interactive mode: real-time status during recording,
   processing, and transcription. Respects `--verbose` and `--quiet`
 - `update` command shows release notes from GitHub before the confirmation prompt
+- `hotkey` command — interactive push-to-talk hotkey reassignment
+- Mouse button support in hotkeys (back, forward, middle and combos with modifiers)
 
 ### Fixed
 - Volume not fully restored when multiple redictum instances run simultaneously
