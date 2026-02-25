@@ -8,16 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Live console output in interactive mode: real-time status messages during
-  the recording → processing → transcription pipeline (Recording, Processing,
-  transcribed text, silence/empty/error states)
-- Respects `--verbose` (adds device, file size, whisper command, timing) and
-  `--quiet` (completely silent, no banner or status output)
+- Live console output in interactive mode: real-time status during recording,
+  processing, and transcription. Respects `--verbose` and `--quiet`
+- `update` command shows release notes from GitHub before the confirmation prompt
 
 ### Fixed
-- Volume not fully restored when multiple redictum instances run simultaneously:
-  shared lock file in `XDG_RUNTIME_DIR` tracks original volume and active PIDs,
-  only the last instance to finish restores the original level
+- Volume not fully restored when multiple redictum instances run simultaneously
 
 ## [1.7.0] - 2026-02-24
 

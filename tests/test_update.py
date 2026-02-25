@@ -70,6 +70,18 @@ class TestFetchLatestVersion:
         return RedictumApp(tmp_path)
 
     def test_success(self, app, monkeypatch):
+        payload = json.dumps({"tag_name": "v1.5.0", "body": "### Added\n- Feature X"})
+        fake_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=payload, stderr="",
+        )
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl")
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
+
+        version, notes = app._fetch_latest_version()
+        assert version == "1.5.0"
+        assert "Feature X" in notes
+
+    def test_empty_body(self, app, monkeypatch):
         payload = json.dumps({"tag_name": "v1.5.0"})
         fake_result = subprocess.CompletedProcess(
             args=[], returncode=0, stdout=payload, stderr="",
@@ -77,7 +89,50 @@ class TestFetchLatestVersion:
         monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl")
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
 
-        assert app._fetch_latest_version() == "1.5.0"
+        version, notes = app._fetch_latest_version()
+        assert version == "1.5.0"
+        assert notes == ""
+
+    def test_null_body(self, app, monkeypatch):
+        """GitHub returns body: null for releases with no notes."""
+        payload = json.dumps({"tag_name": "v1.5.0", "body": None})
+        fake_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=payload, stderr="",
+        )
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl")
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
+
+        version, notes = app._fetch_latest_version()
+        assert version == "1.5.0"
+        assert notes == ""
+
+    def test_invalid_tag_name(self, app, monkeypatch):
+        """Reject tag_name that doesn't match semver pattern."""
+        from redictum import RedictumError
+
+        payload = json.dumps({"tag_name": "../../evil"})
+        fake_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=payload, stderr="",
+        )
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl")
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
+
+        with pytest.raises(RedictumError, match="Unexpected tag_name"):
+            app._fetch_latest_version()
+
+    def test_non_string_tag_name(self, app, monkeypatch):
+        """Reject tag_name that is not a string."""
+        from redictum import RedictumError
+
+        payload = json.dumps({"tag_name": 42})
+        fake_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=payload, stderr="",
+        )
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl")
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
+
+        with pytest.raises(RedictumError, match="Unexpected tag_name"):
+            app._fetch_latest_version()
 
     def test_network_error(self, app, monkeypatch):
         from redictum import RedictumError
@@ -119,13 +174,13 @@ class TestRunUpdate:
     def test_already_up_to_date(self, app, monkeypatch):
         from redictum import EXIT_OK, VERSION
 
-        monkeypatch.setattr(app, "_fetch_latest_version", lambda: VERSION)
+        monkeypatch.setattr(app, "_fetch_latest_version", lambda: (VERSION, ""))
         assert app.run_update() == EXIT_OK
 
     def test_downgrade_protection(self, app, monkeypatch):
         from redictum import EXIT_OK
 
-        monkeypatch.setattr(app, "_fetch_latest_version", lambda: "0.0.1")
+        monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("0.0.1", ""))
         assert app.run_update() == EXIT_OK
 
     def test_network_failure(self, app, monkeypatch):
@@ -142,7 +197,7 @@ class TestRunUpdate:
         import redictum
         from redictum import EXIT_OK
 
-        monkeypatch.setattr(app, "_fetch_latest_version", lambda: "99.0.0")
+        monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("99.0.0", ""))
         monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: False)
         assert app.run_update() == EXIT_OK
 
@@ -150,7 +205,7 @@ class TestRunUpdate:
         import redictum
         from redictum import EXIT_OK
 
-        monkeypatch.setattr(app, "_fetch_latest_version", lambda: "99.0.0")
+        monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("99.0.0", ""))
 
         def fake_confirm(*a, **kw):
             raise EOFError
@@ -163,7 +218,7 @@ class TestRunUpdate:
         import redictum
         from redictum import EXIT_ERROR, Daemon
 
-        monkeypatch.setattr(app, "_fetch_latest_version", lambda: "99.0.0")
+        monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("99.0.0", ""))
         monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: True)
         monkeypatch.setattr(Daemon, "status", lambda self: 12345)
 
@@ -173,7 +228,7 @@ class TestRunUpdate:
         import redictum
         from redictum import EXIT_ERROR
 
-        monkeypatch.setattr(app, "_fetch_latest_version", lambda: "99.0.0")
+        monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("99.0.0", ""))
         monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: True)
         monkeypatch.setattr(
             "redictum.Daemon.status", lambda self: None,
@@ -195,7 +250,7 @@ class TestRunUpdate:
         import redictum
         from redictum import EXIT_OK
 
-        monkeypatch.setattr(app, "_fetch_latest_version", lambda: "99.0.0")
+        monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("99.0.0", "### Fixed\n- Bug Y"))
         monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: True)
         monkeypatch.setattr(
             "redictum.Daemon.status", lambda self: None,
@@ -229,3 +284,81 @@ class TestRunUpdate:
 
         # Verify script was replaced
         assert fake_script.read_bytes() == new_content
+
+    def test_changelog_displayed(self, app, monkeypatch, capsys):
+        import redictum
+        from redictum import EXIT_OK
+
+        notes = "### Added\n- Cool feature\n- Another feature"
+        monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("99.0.0", notes))
+        monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: False)
+
+        app.run_update()
+        captured = capsys.readouterr().out
+        assert "Cool feature" in captured
+        assert "Another feature" in captured
+
+    def test_no_changelog_when_empty(self, app, monkeypatch, capsys):
+        import redictum
+        from redictum import EXIT_OK
+
+        monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("99.0.0", ""))
+        monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: False)
+
+        app.run_update()
+        captured = capsys.readouterr().out
+        # Should have version line but no extra blank lines from changelog
+        assert "99.0.0" in captured
+
+    def test_rich_markup_escaped_in_notes(self, app, monkeypatch, capsys):
+        import redictum
+
+        notes = "[bold red]HACKED[/bold red]\n[link=http://evil.com]click[/link]"
+        monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("99.0.0", notes))
+        monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: False)
+
+        app.run_update()
+        captured = capsys.readouterr().out
+        # Rich markup must be neutralised — literal brackets printed as text
+        # If markup were interpreted, "[bold red]" would be stripped from output
+        assert "[bold red]HACKED[/bold red]" in captured
+        assert "[link=http://evil.com]click[/link]" in captured
+
+    def test_ansi_escapes_stripped_in_notes(self, app, monkeypatch, capsys):
+        import redictum
+
+        notes = "Normal\x1b[2Jtext\x1b[31mcolored"
+        monkeypatch.setattr(app, "_fetch_latest_version", lambda: ("99.0.0", notes))
+        monkeypatch.setattr(redictum, "_confirm", lambda *a, **kw: False)
+
+        app.run_update()
+        captured = capsys.readouterr().out
+        assert "\x1b[2J" not in captured
+        assert "\x1b[31m" not in captured
+        assert "Normaltext" in captured or "Normal" in captured
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_external
+# ---------------------------------------------------------------------------
+
+class TestSanitizeExternal:
+    """_sanitize_external: neutralise Rich markup and ANSI escapes."""
+
+    def test_escapes_rich_brackets(self):
+        from redictum import _sanitize_external
+        assert _sanitize_external("[bold]text[/bold]") == r"\[bold]text\[/bold]"
+
+    def test_strips_ansi_escape(self):
+        from redictum import _sanitize_external
+        assert _sanitize_external("hello\x1b[31mworld") == r"helloworld"
+
+    def test_combined(self):
+        from redictum import _sanitize_external
+        result = _sanitize_external("\x1b[2J[link=http://x]click[/link]")
+        assert "\x1b" not in result
+        assert "[link" not in result or r"\[link" in result
+
+    def test_plain_text_unchanged(self):
+        from redictum import _sanitize_external
+        assert _sanitize_external("just plain text 123") == "just plain text 123"

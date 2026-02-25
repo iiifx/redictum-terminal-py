@@ -451,8 +451,10 @@ print(VERSION)
 " 2>/dev/null)
 
 # Create a fake curl that serves update-related URLs
+# Usage: setup_fake_curl <version> [release_notes]
 setup_fake_curl() {
     local fake_version="$1"
+    local fake_body="${2:-}"
     local fake_curl_dir="$WORKDIR/fake-curl-bin"
     mkdir -p "$fake_curl_dir"
 
@@ -461,6 +463,12 @@ setup_fake_curl() {
     cp "$SCRIPT" "$fake_new_script"
     local real_hash
     real_hash=$(sha256sum "$fake_new_script" | awk '{print $1}')
+
+    # Prepare JSON body field: null if empty, string otherwise
+    local body_json="null"
+    if [[ -n "$fake_body" ]]; then
+        body_json=$(printf '%s' "$fake_body" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+    fi
 
     cat > "$fake_curl_dir/curl" <<FAKECURL
 #!/usr/bin/env python3
@@ -481,7 +489,7 @@ if url is None:
     sys.exit(1)
 
 if "releases/latest" in url:
-    print(json.dumps({"tag_name": "v${fake_version}"}))
+    print(json.dumps({"tag_name": "v${fake_version}", "body": ${body_json}}))
     sys.exit(0)
 
 if url.endswith(".sha256"):
@@ -534,16 +542,17 @@ test_15_update_daemon_running() {
     assert_contains "$output" "stop" || return 1
 }
 
-# T16: Update — user declines (EOF)
+# T16: Update — user declines (EOF), changelog displayed
 test_16_update_user_declines_eof() {
     prepare_env
-    setup_fake_curl "99.0.0"
+    setup_fake_curl "99.0.0" "### Fixed\n- Important bugfix"
     local output
     output=$(PATH="$WORKDIR/fake-curl-bin:$PATH" python3 "$SCRIPT" update </dev/null 2>&1)
     local rc=$?
     cleanup_fake_curl
     assert_exit_ok $rc || return 1
     assert_contains "$output" "99.0.0" || return 1
+    assert_contains "$output" "Important bugfix" || return 1
 }
 
 # T17: Quiet first-run — creates config and state with defaults, minimal output

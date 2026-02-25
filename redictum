@@ -241,6 +241,15 @@ class RedictumError(Exception):
     """Base exception for Redictum Terminal errors."""
 
 
+_RE_ANSI = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _sanitize_external(text: str) -> str:
+    """Neutralise Rich markup and ANSI escapes in untrusted text."""
+    text = _RE_ANSI.sub("", text)
+    return text.replace("[", r"\[")
+
+
 def _rprint(text: str, level: int = 0) -> None:
     """Print with rich markup if available, plain print otherwise.
 
@@ -3603,11 +3612,11 @@ class RedictumApp:
 
     # -- Self-update ----------------------------------------------------------
 
-    def _fetch_latest_version(self) -> str:
-        """Query GitHub Releases API for the latest version tag.
+    def _fetch_latest_version(self) -> tuple[str, str]:
+        """Query GitHub Releases API for the latest version tag and notes.
 
         Returns:
-            Version string without leading ``v`` (e.g. ``1.4.0``).
+            Tuple of (version string without leading ``v``, release notes body).
 
         Raises:
             RedictumError: On network/parse failure.
@@ -3635,14 +3644,16 @@ class RedictumApp:
                 "Check your internet connection."
             )
 
-        import json as _json
         try:
-            data = _json.loads(result.stdout)
+            data = json.loads(result.stdout)
             tag = data["tag_name"]
         except (ValueError, KeyError) as exc:
             raise RedictumError("Unexpected response from GitHub API.") from exc
 
-        return tag.lstrip("v")
+        if not isinstance(tag, str) or not re.fullmatch(r"v?\d+\.\d+\.\d+", tag):
+            raise RedictumError("Unexpected tag_name in GitHub API response.")
+
+        return tag.lstrip("v"), data.get("body") or ""
 
     def _download_to_file(self, url: str, dest: Path, timeout: int) -> None:
         """Download *url* to *dest* file using curl or wget.
@@ -3680,7 +3691,7 @@ class RedictumApp:
         _rprint("  Checking for updates...")
 
         try:
-            latest = self._fetch_latest_version()
+            latest, release_notes = self._fetch_latest_version()
         except RedictumError:
             raise
 
@@ -3690,6 +3701,11 @@ class RedictumApp:
             return EXIT_OK
 
         _rprint(f"  New version available: [green]{latest}[/green]")
+        if release_notes:
+            _rprint("")
+            for line in release_notes.strip().splitlines():
+                _rprint(f"  {_sanitize_external(line)}")
+            _rprint("")
         if not _confirm("  Update?", default=True):
             return EXIT_OK
 
