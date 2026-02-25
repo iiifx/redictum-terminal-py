@@ -22,5 +22,7 @@ audio/
 transcripts/
 logs/
 .state
-AGENTS.md
+.coveragerc
+.ruff_cache/
+ruff.toml
 .inner-loop-*
