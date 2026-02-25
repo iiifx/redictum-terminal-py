@@ -2465,17 +2465,34 @@ def _language_wizard(detected_lang: str) -> tuple[str, str] | None:  # pragma: n
     return None
 
 
-class Transcriber:
-    """Transcribe audio via whisper.cpp CLI."""
+class TranscriberBackend(ABC):
+    """Abstract transcriber — run speech-to-text on an audio file."""
 
-    BLANK_MARKERS = {"[BLANK_AUDIO]", "[ЗВУК]", "(silence)"}
+    @abstractmethod
+    def transcribe(
+        self,
+        audio_path: Path,
+        language: str,
+        prompt: str | None,
+        translate: bool,
+    ) -> str:
+        """Return raw transcribed text.
+
+        Args:
+            audio_path: Path to the audio file.
+            language: Language code (e.g. 'ru', 'en'). Empty for auto-detect.
+            prompt: Transcription prompt, or None to omit.
+            translate: If True, translate to English.
+        """
+
+
+class WhisperCliTranscriber(TranscriberBackend):
+    """whisper.cpp CLI implementation."""
 
     def __init__(
         self,
         whisper_cli: str,
         model_path: str,
-        language: str,
-        prompt: str = "",
         timeout: int = 120,
     ) -> None:
         cli = Path(whisper_cli)
@@ -2488,9 +2505,68 @@ class Transcriber:
             raise RedictumError(f"Whisper model not found: {model}")
         self._cli = str(cli)
         self._model = str(model)
+        self._timeout = timeout
+
+    def transcribe(
+        self,
+        audio_path: Path,
+        language: str,
+        prompt: str | None,
+        translate: bool,
+    ) -> str:
+        """Transcribe via whisper-cli subprocess."""
+        cmd = [
+            self._cli,
+            "-m", self._model,
+            "-f", str(audio_path),
+            "--no-timestamps",
+            "-np",
+        ]
+        if translate:
+            # No -l flag: whisper auto-detects source language
+            # and --translate outputs English
+            cmd.append("--translate")
+        elif language:
+            cmd.extend(["-l", language])
+        if prompt:
+            cmd.extend(["--prompt", prompt])
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RedictumError(
+                f"Transcription timed out after {self._timeout}s"
+            ) from exc
+
+        if result.returncode != 0:
+            logging.error("whisper-cli stderr:\n%s", result.stderr)
+            logging.error("whisper-cli stdout:\n%s", result.stdout)
+            raise RedictumError(
+                f"whisper-cli failed (code {result.returncode}): "
+                f"{result.stderr.strip()[-500:]}"
+            )
+        return result.stdout.strip()
+
+
+class Transcriber:
+    """Transcribe audio — platform-independent orchestrator."""
+
+    BLANK_MARKERS = {"[BLANK_AUDIO]", "[ЗВУК]", "(silence)"}
+
+    def __init__(
+        self,
+        backend: TranscriberBackend,
+        language: str,
+        prompt: str = "",
+    ) -> None:
+        self._backend = backend
         self._language = language
         self._prompt = prompt
-        self._timeout = timeout
 
     def _resolve_prompt(self) -> str | None:
         """Pick the right prompt for transcription.
@@ -2511,60 +2587,27 @@ class Transcriber:
 
         Args:
             audio_path: Path to the audio file.
-            translate: If True, also translate to English via --translate.
+            translate: If True, also translate to English.
 
         Returns:
             Transcribed text string (empty if nothing useful detected).
 
         Raises:
-            RedictumError: If whisper-cli fails or times out.
+            RedictumError: If transcription fails or times out.
         """
-        cmd = [
-            self._cli,
-            "-m", self._model,
-            "-f", str(audio_path),
-            "--no-timestamps",
-            "-np",
-        ]
-        if translate:
-            # No -l flag: whisper auto-detects source language
-            # and --translate outputs English
-            cmd.append("--translate")
-        elif self._language:
-            cmd.extend(["-l", self._language])
-        if not translate:
-            prompt = self._resolve_prompt()
-            if prompt:
-                cmd.extend(["--prompt", prompt])
+        prompt = self._resolve_prompt() if not translate else None
 
-        _rprint(f"  Whisper cmd: {' '.join(cmd)}", level=1)
+        _rprint(f"  Transcribing: {audio_path.name}", level=1)
         logging.info(
             "Transcribing: %s (translate: %s)", audio_path.name, translate,
         )
 
         t0 = time.monotonic()
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self._timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RedictumError(
-                f"Transcription timed out after {self._timeout}s"
-            ) from exc
-
-        if result.returncode != 0:
-            logging.error("whisper-cli stderr:\n%s", result.stderr)
-            logging.error("whisper-cli stdout:\n%s", result.stdout)
-            raise RedictumError(
-                f"whisper-cli failed (code {result.returncode}): "
-                f"{result.stderr.strip()[-500:]}"
-            )
-
-        text = result.stdout.strip()
+        text = self._backend.transcribe(
+            audio_path, self._language, prompt, translate,
+        )
         elapsed = time.monotonic() - t0
+
         _rprint(f"  Whisper: {len(text)} chars in {elapsed:.1f}s", level=1)
         # Filter blank audio artifacts
         if not text or text in self.BLANK_MARKERS:
@@ -4177,12 +4220,13 @@ class RedictumApp:
         rec_backend = ArecordRecorder(self._audio_cfg["recording_device"])
         self._recorder = AudioRecorder(audio_dir, rec_backend)
         self._processor = AudioProcessor(FfmpegProcessor())
-        self._transcriber = Transcriber(
+        tr_backend = WhisperCliTranscriber(
             dep["whisper_cli"],
             dep["whisper_model"],
-            language,
-            prompt=dep.get("whisper_prompt", ""),
             timeout=dep.get("whisper_timeout", 120),
+        )
+        self._transcriber = Transcriber(
+            tr_backend, language, prompt=dep.get("whisper_prompt", ""),
         )
         self._clipboard = ClipboardManager()
         player = PaplayPlayer()

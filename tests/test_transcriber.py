@@ -1,4 +1,4 @@
-"""Tests for Transcriber — the most critical test file.
+"""Tests for Transcriber, TranscriberBackend ABC, and WhisperCliTranscriber.
 
 Documents whisper translate mode behavior:
 - translate=True → --translate, NO -l flag, NO --prompt
@@ -28,21 +28,136 @@ def make_transcriber(tmp_path):
     model.touch()
 
     def _make(language="ru", prompt="auto", timeout=120):
-        from redictum import Transcriber
+        from redictum import Transcriber, WhisperCliTranscriber
 
-        return Transcriber(
+        backend = WhisperCliTranscriber(
             whisper_cli=str(cli),
             model_path=str(model),
-            language=language,
-            prompt=prompt,
             timeout=timeout,
         )
+        return Transcriber(backend, language, prompt=prompt)
 
     return _make
 
 
+# ── TranscriberBackend ABC ───────────────────────────────────────────
+
+
+class TestTranscriberBackendABC:
+    """TranscriberBackend cannot be instantiated directly."""
+
+    def test_cannot_instantiate(self):
+        from redictum import TranscriberBackend
+
+        with pytest.raises(TypeError):
+            TranscriberBackend()  # type: ignore[abstract]
+
+    def test_subclass_must_implement_all(self):
+        from redictum import TranscriberBackend
+
+        class Incomplete(TranscriberBackend):
+            pass
+
+        with pytest.raises(TypeError):
+            Incomplete()  # type: ignore[abstract]
+
+
+# ── WhisperCliTranscriber unit tests ─────────────────────────────────
+
+
+class TestWhisperCliTranscriber:
+    """WhisperCliTranscriber: whisper-cli subprocess management."""
+
+    def test_init_validates_cli_exists(self, tmp_path):
+        from redictum import RedictumError, WhisperCliTranscriber
+
+        model = tmp_path / "model.bin"
+        model.touch()
+        with pytest.raises(RedictumError, match="not found"):
+            WhisperCliTranscriber(str(tmp_path / "missing"), str(model))
+
+    def test_init_validates_cli_executable(self, tmp_path):
+        from redictum import RedictumError, WhisperCliTranscriber
+
+        cli = tmp_path / "whisper-cli"
+        cli.touch(mode=0o644)
+        model = tmp_path / "model.bin"
+        model.touch()
+        with pytest.raises(RedictumError, match="not executable"):
+            WhisperCliTranscriber(str(cli), str(model))
+
+    def test_init_validates_model_exists(self, tmp_path):
+        from redictum import RedictumError, WhisperCliTranscriber
+
+        cli = tmp_path / "whisper-cli"
+        cli.touch(mode=0o755)
+        with pytest.raises(RedictumError, match="model not found"):
+            WhisperCliTranscriber(str(cli), str(tmp_path / "missing.bin"))
+
+    def test_transcribe_calls_subprocess(self, tmp_path, monkeypatch):
+        from redictum import WhisperCliTranscriber
+
+        cli = tmp_path / "whisper-cli"
+        cli.touch(mode=0o755)
+        model = tmp_path / "model.bin"
+        model.touch()
+
+        mock_run = MagicMock()
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "hello"
+        mock_run.return_value.stderr = ""
+        monkeypatch.setattr("subprocess.run", mock_run)
+
+        backend = WhisperCliTranscriber(str(cli), str(model))
+        result = backend.transcribe(Path("/tmp/a.wav"), "ru", None, False)
+        assert result == "hello"
+        args = mock_run.call_args[0][0]
+        assert str(cli) in args
+        assert str(model) in args
+
+    def test_transcribe_timeout_raises(self, tmp_path, monkeypatch):
+        import subprocess
+
+        from redictum import RedictumError, WhisperCliTranscriber
+
+        cli = tmp_path / "whisper-cli"
+        cli.touch(mode=0o755)
+        model = tmp_path / "model.bin"
+        model.touch()
+
+        def fake_run(*a, **kw):
+            raise subprocess.TimeoutExpired("cmd", 1)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+
+        backend = WhisperCliTranscriber(str(cli), str(model), timeout=1)
+        with pytest.raises(RedictumError, match="timed out"):
+            backend.transcribe(Path("/tmp/a.wav"), "ru", None, False)
+
+    def test_transcribe_failure_raises(self, tmp_path, monkeypatch):
+        from redictum import RedictumError, WhisperCliTranscriber
+
+        cli = tmp_path / "whisper-cli"
+        cli.touch(mode=0o755)
+        model = tmp_path / "model.bin"
+        model.touch()
+
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "error"
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+
+        backend = WhisperCliTranscriber(str(cli), str(model))
+        with pytest.raises(RedictumError, match="whisper-cli failed"):
+            backend.transcribe(Path("/tmp/a.wav"), "ru", None, False)
+
+
+# ── Command building (integration: orchestrator + backend) ───────────
+
+
 class TestCommandBuilding:
-    """Verify the whisper-cli command line for various translate × language × prompt combos."""
+    """Verify the whisper-cli command line for various translate x language x prompt combos."""
 
     @pytest.mark.parametrize(
         "translate, language, prompt, must_have, must_not_have",
@@ -148,14 +263,14 @@ class TestResolvePrompt:
     """Verify _resolve_prompt logic: auto vs override vs disabled."""
 
     def test_auto_known_language(self, make_transcriber):
-        """'auto' + known language → select from LANGUAGE_PROMPTS."""
+        """'auto' + known language -> select from LANGUAGE_PROMPTS."""
         from redictum import LANGUAGE_PROMPTS
 
         transcriber = make_transcriber(language="ru", prompt="auto")
         assert transcriber._resolve_prompt() == LANGUAGE_PROMPTS["ru"]
 
     def test_auto_unknown_language(self, make_transcriber):
-        """'auto' + unknown language → None (no prompt)."""
+        """'auto' + unknown language -> None (no prompt)."""
         transcriber = make_transcriber(language="xx", prompt="auto")
         assert transcriber._resolve_prompt() is None
 
@@ -174,7 +289,7 @@ class TestResolvePrompt:
         assert transcriber._resolve_prompt() == "My custom prompt."
 
     def test_empty_prompt_disabled(self, make_transcriber):
-        """Empty string → no prompt (disabled)."""
+        """Empty string -> no prompt (disabled)."""
         transcriber = make_transcriber(language="ru", prompt="")
         assert transcriber._resolve_prompt() is None
 
@@ -187,7 +302,7 @@ class TestAutoPromptE2E:
         "ru", "de", "ja", "uk", "ko", "it", "tr", "pl",
     ])
     def test_auto_prompt_in_command(self, lang, make_transcriber, monkeypatch):
-        """prompt='auto' + language → correct LANGUAGE_PROMPTS[lang] in whisper cmd."""
+        """prompt='auto' + language -> correct LANGUAGE_PROMPTS[lang] in whisper cmd."""
         from redictum import LANGUAGE_PROMPTS
 
         transcriber = make_transcriber(language=lang, prompt="auto")

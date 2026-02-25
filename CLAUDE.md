@@ -138,7 +138,9 @@ redictum-terminal-py/
 | `AudioProcessorBackend` | ABC for audio normalization |
 | `FfmpegProcessor` | FFmpeg loudnorm implementation via subprocess |
 | `AudioProcessor` | Normalization orchestrator + speech detection (delegates to backend) |
-| `Transcriber` | Transcribe via whisper-cli (--translate for English, language-aware prompts) |
+| `TranscriberBackend` | ABC for speech-to-text transcription |
+| `WhisperCliTranscriber` | whisper.cpp CLI implementation via subprocess |
+| `Transcriber` | Transcription orchestrator — prompt resolution, blank filtering (delegates to backend) |
 | `ClipboardManager` | xclip copy/paste + universal save/restore (text, images, binary via X11 TARGETS) |
 | `VolumeController` | System volume save/restore during recording |
 | `SoundPlayerBackend` | ABC for sound playback (play a WAV at a given volume) |
