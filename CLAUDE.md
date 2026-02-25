@@ -111,6 +111,16 @@ redictum-terminal-py/
 | `./redictum --version` | Print version |
 | `./redictum --help` | Show help |
 
+## Design Principles
+
+1. **Single-file executable** — `redictum` is the only deliverable artifact. No install scripts, no archives, no pip. Just `curl + chmod +x` and it works.
+2. **Subprocess over libraries** — minimal Python packages. Core work is done via subprocess and system CLI tools (arecord, ffmpeg, xclip, xdotool, paplay).
+3. **Fail-fast diagnostics** — two-stage check at startup: critical deps (Python 3.10+, Linux, PulseAudio, ALSA, X11) fail immediately; installable deps (ffmpeg, xclip, pynput, rich) are offered for auto-install.
+4. **Defaults hardcoded in code** — config is generated from code defaults (single source of truth). User only changes what they need. Missing keys fall back to defaults.
+5. **Logic separated from I/O** — single-responsibility classes. Unit tests cover logic, not system calls.
+6. **Code quality** — PEP 8, type hints everywhere, Google-style docstrings, typed exceptions (no bare `except:`), named constants (no magic numbers), ruff for linting.
+7. **Graceful shutdown** — SIGTERM/SIGINT → stop recording → wait for transcription to finish → remove PID file → exit cleanly.
+
 ## Code Architecture (inside `redictum`)
 | Class | Purpose |
 |-------|---------|
@@ -137,4 +147,3 @@ redictum-terminal-py/
 |------|---------|
 | `CLAUDE.md` | This file — project structure map |
 | `CHANGELOG.md` | Version history (Keep a Changelog format) |
-| `.wip/design.md` | Original design document (v1.0, partially outdated) |
