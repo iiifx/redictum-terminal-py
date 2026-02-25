@@ -385,14 +385,7 @@ class ConfigManager:
             text = DEFAULT_CONFIG_INI
 
         for key, value in updates.items():
-            ini_val = self._format_value(value)
-            text = re.sub(
-                rf"^({re.escape(key)}\s*=)\s*.*$",
-                lambda m, v=ini_val: f"{m.group(1)} {v}",
-                text,
-                count=1,
-                flags=re.MULTILINE,
-            )
+            text = self._set_ini_value(text, key, self._format_value(value))
 
         self._path.write_text(text, encoding="utf-8")
 
@@ -445,14 +438,7 @@ class ConfigManager:
                             updates[ini_key] = value
 
         for key, value in updates.items():
-            ini_val = self._format_value(value)
-            text = re.sub(
-                rf"^({re.escape(key)}\s*=)\s*.*$",
-                lambda m, v=ini_val: f"{m.group(1)} {v}",
-                text,
-                count=1,
-                flags=re.MULTILINE,
-            )
+            text = self._set_ini_value(text, key, self._format_value(value))
 
         self._path.write_text(text, encoding="utf-8")
         self._yaml_path.rename(self._yaml_path.with_suffix(".yaml.bak"))
@@ -506,14 +492,7 @@ class ConfigManager:
         # Build new config in memory: fresh template + user values
         text = DEFAULT_CONFIG_INI
         for key, value in user_values.items():
-            ini_val = self._format_value(value)
-            text = re.sub(
-                rf"^({re.escape(key)}\s*=)\s*.*$",
-                lambda m, v=ini_val: f"{m.group(1)} {v}",
-                text,
-                count=1,
-                flags=re.MULTILINE,
-            )
+            text = self._set_ini_value(text, key, self._format_value(value))
 
         # Backup old config
         backup_path = self._path.with_suffix(".ini.bak")
@@ -599,6 +578,17 @@ class ConfigManager:
         if isinstance(value, str):
             return f'"{value}"'
         return str(value)
+
+    @staticmethod
+    def _set_ini_value(text: str, key: str, value: str) -> str:
+        """Replace value of *key* in INI text, preserving comments."""
+        return re.sub(
+            rf"^({re.escape(key)}\s*=)\s*.*$",
+            lambda m: f"{m.group(1)} {value}",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
 
     @staticmethod
     def _deep_copy(d: dict[str, Any]) -> dict[str, Any]:
@@ -1032,18 +1022,6 @@ class Diagnostics:
     def _has_apt(self) -> bool:
         """Check if apt is available (Debian/Ubuntu/Mint)."""
         return shutil.which("apt") is not None
-
-    def _check_dpkg(self, package: str) -> bool:
-        """Check if a package is installed via dpkg -s."""
-        try:
-            result = subprocess.run(
-                ["dpkg", "-s", package],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return result.returncode == 0
-        except FileNotFoundError:
-            return False
 
     # -- Optional dependencies -----------------------------------------------
 
@@ -3330,25 +3308,9 @@ class HotkeyListener:
     def _on_mouse_click(self, _x: int, _y: int, button: Any, pressed: bool) -> None:
         """Handle mouse click: delegate to press/release as if keyboard."""
         if pressed:
-            mode = self._resolve_mode(button)
-            if mode is None:
-                return
-            if self._is_holding or self._hold_timer is not None:
-                return
-            self._pending_mode = mode
-            self._hold_timer = threading.Timer(self._hold_delay, self._fire_hold)
-            self._hold_timer.daemon = True
-            self._hold_timer.start()
+            self._on_press(button)
         else:
-            if not (button == self._target_key or button == self._translate_target_key):
-                return
-            if self._hold_timer is not None:
-                self._hold_timer.cancel()
-                self._hold_timer = None
-            if self._is_holding:
-                self._is_holding = False
-                if self._on_release:
-                    self._on_release(self._pending_mode)
+            self._on_key_release(button)
 
     def _needs_mouse(self) -> bool:
         """Return True if any configured hotkey uses a mouse button."""
@@ -4191,7 +4153,7 @@ class RedictumApp:
             return EXIT_OK
 
         self._config_mgr.update({config_key: new_combo})
-        _rprint(f"  [green]Saved.[/green]")
+        _rprint("  [green]Saved.[/green]")
         logging.info("Hotkey %s changed to: %s", label, new_combo)
 
         # Daemon notice
