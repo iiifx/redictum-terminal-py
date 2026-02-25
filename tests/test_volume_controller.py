@@ -35,8 +35,8 @@ def _fake_pactl(volume_pct: int = 50):
     def fake_run(cmd, **kw):
         calls.append(cmd)
         result = MagicMock()
-        result.stdout = f"Volume: front-left: 32768 /  {volume_pct}% / -18.06 dB"
         result.returncode = 0
+        result.stdout = f"Volume: front-left: 32768 /  {volume_pct}% / -18.06 dB"
         return result
 
     return fake_run, calls
@@ -76,6 +76,7 @@ class TestPactlVolumeBackend:
 
         def fake_run(cmd, **kw):
             r = MagicMock()
+            r.returncode = 0
             r.stdout = "Volume: front-left: 32768 /  75% / -7.50 dB"
             return r
 
@@ -93,11 +94,25 @@ class TestPactlVolumeBackend:
         backend = PactlVolumeBackend()
         assert backend.get_volume() is None
 
+    def test_get_volume_returns_none_on_nonzero_rc(self, monkeypatch):
+        from redictum import PactlVolumeBackend
+
+        def fake_run(cmd, **kw):
+            r = MagicMock()
+            r.returncode = 1
+            r.stdout = "Volume: front-left: 32768 /  75% / -7.50 dB"
+            return r
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        backend = PactlVolumeBackend()
+        assert backend.get_volume() is None
+
     def test_get_volume_returns_none_on_unparsable(self, monkeypatch):
         from redictum import PactlVolumeBackend
 
         def fake_run(cmd, **kw):
             r = MagicMock()
+            r.returncode = 0
             r.stdout = "no volume info"
             return r
 
@@ -185,6 +200,7 @@ class TestReduce:
         """reduce() skips when pactl output doesn't contain volume percentage."""
         def fake_run(cmd, **kw):
             result = MagicMock()
+            result.returncode = 0
             result.stdout = "no volume info here"
             return result
 
@@ -200,6 +216,7 @@ class TestReduce:
             call_count[0] += 1
             if call_count[0] == 1:
                 result = MagicMock()
+                result.returncode = 0
                 result.stdout = "Volume: front-left: 32768 /  50% / -18.06 dB"
                 return result
             raise FileNotFoundError("pactl")
@@ -272,6 +289,7 @@ class TestRestore:
             call_count[0] += 1
             if call_count[0] <= 2:
                 result = MagicMock()
+                result.returncode = 0
                 result.stdout = "Volume: front-left: 32768 /  50% / -18.06 dB"
                 return result
             raise subprocess.TimeoutExpired(cmd, 2)
@@ -301,6 +319,7 @@ class TestMultiInstance:
         def fake_run(cmd, **kw):
             call_count[0] += 1
             result = MagicMock()
+            result.returncode = 0
             # First get returns 50% (original), later gets return 15% (reduced)
             if cmd[1] == "get-sink-volume":
                 vol = 50 if call_count[0] <= 2 else 15

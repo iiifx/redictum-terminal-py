@@ -7,13 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-dev \
-    pulseaudio-utils \
+    build-essential \
     alsa-utils \
     ffmpeg \
     xclip \
     xdotool \
-    cmake \
-    build-essential \
     xvfb \
     procps \
     curl \
@@ -27,8 +25,9 @@ WORKDIR /opt/redictum-test
 # (/usr/local/bin has priority over /usr/bin)
 COPY e2e/fake-paplay  /usr/local/bin/paplay
 COPY e2e/fake-arecord /usr/local/bin/arecord
+COPY e2e/fake-pactl   /usr/local/bin/pactl
 COPY e2e/fake-whisper-cli /usr/local/bin/whisper-cli
-RUN chmod +x /usr/local/bin/paplay /usr/local/bin/arecord /usr/local/bin/whisper-cli
+RUN chmod +x /usr/local/bin/paplay /usr/local/bin/arecord /usr/local/bin/pactl /usr/local/bin/whisper-cli
 
 # Place fake whisper-cli and model at default config paths so check_whisper()
 # passes on first run without interactive prompts (stdin is /dev/null).

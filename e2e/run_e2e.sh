@@ -2,7 +2,7 @@
 # =============================================================================
 # Redictum Terminal — E2E Test Suite (Docker)
 # =============================================================================
-# Runs 18 daemon lifecycle + update + verbosity tests in a clean Docker container.
+# Runs 20 daemon lifecycle + pipeline + update + verbosity tests in a clean Docker container.
 # Usage: docker compose up --build --abort-on-container-exit
 # =============================================================================
 
@@ -464,8 +464,8 @@ setup_fake_curl() {
     local real_hash
     real_hash=$(sha256sum "$fake_new_script" | awk '{print $1}')
 
-    # Prepare JSON body field: null if empty, string otherwise
-    local body_json="null"
+    # Prepare JSON body field: None if empty, string otherwise (Python syntax)
+    local body_json="None"
     if [[ -n "$fake_body" ]]; then
         body_json=$(printf '%s' "$fake_body" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
     fi
@@ -476,12 +476,18 @@ import sys, os, json, shutil
 
 args = sys.argv[1:]
 
-# Parse -o flag
+# Parse flags: -o <file>, -m <sec>, --max-time <sec>, --connect-timeout <sec>
 output_file = None
 url = None
+skip_next = False
 for i, a in enumerate(args):
-    if a == "-o" and i + 1 < len(args):
-        output_file = args[i + 1]
+    if skip_next:
+        skip_next = False
+        continue
+    if a in ("-o", "-m", "--max-time", "--connect-timeout") and i + 1 < len(args):
+        if a == "-o":
+            output_file = args[i + 1]
+        skip_next = True
     elif not a.startswith("-"):
         url = a
 
@@ -606,6 +612,55 @@ test_19_hotkey_eof_cancel() {
     assert_contains "$output" "Record" || return 1
 }
 
+# T20: Full pipeline — hold key → record → normalize → transcribe → transcript
+test_20_full_pipeline() {
+    prepare_env
+    # Lower hold delay for faster test
+    sed -i 's/hotkey_hold_delay = 0.6/hotkey_hold_delay = 0.3/' "$WORKDIR/config.ini"
+
+    python3 "$SCRIPT" start </dev/null >/dev/null 2>&1
+    wait_for_daemon || return 1
+
+    # Let daemon fully enter the main loop (HotkeyListener init)
+    sleep 2
+
+    # Simulate push-to-talk: hold Insert for ~1s, then release
+    xdotool keydown Insert
+    sleep 1
+    xdotool keyup Insert
+
+    # Wait for transcript file to appear (pipeline: normalize + transcribe)
+    local i=0
+    local found=""
+    while [[ $i -lt 30 ]]; do
+        if grep -rq "Hello from fake whisper" "$WORKDIR/transcripts/" 2>/dev/null; then
+            found="yes"
+            break
+        fi
+        sleep 0.5
+        ((i++))
+    done
+
+    if [[ -z "$found" ]]; then
+        echo -e "  ${RED}FAIL${NC}: transcript with expected text not found within 15s"
+        local latest_log
+        latest_log=$(ls -t "$WORKDIR/logs/"*.log 2>/dev/null | head -1)
+        if [[ -n "$latest_log" ]]; then
+            echo "  Last 20 log lines:"
+            tail -20 "$latest_log" 2>/dev/null | sed 's/^/    /'
+        fi
+        return 1
+    fi
+
+    # Verify audio files were created
+    local audio_count
+    audio_count=$(ls "$WORKDIR/audio/"*.wav 2>/dev/null | wc -l)
+    if [[ "$audio_count" -eq 0 ]]; then
+        echo -e "  ${RED}FAIL${NC}: no audio files found"
+        return 1
+    fi
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -645,6 +700,7 @@ run_test "T16 Update: EOF decline" test_16_update_user_declines_eof
 run_test "T17 Quiet first-run"   test_17_quiet_first_run
 run_test "T18 Quiet start/stop"  test_18_quiet_start_stop
 run_test "T19 Hotkey: EOF cancel" test_19_hotkey_eof_cancel
+run_test "T20 Full pipeline"     test_20_full_pipeline
 
 # Summary
 echo -e "\n${BOLD}==============================${NC}"

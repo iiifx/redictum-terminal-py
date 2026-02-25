@@ -21,7 +21,7 @@ System-wide voice-to-text CLI utility for Linux. Captures hotkeys, records micro
 ## Project Structure
 ```
 redictum-terminal-py/
-├── redictum                  # Main executable (chmod +x, single file, ~4500 lines)
+├── redictum                  # Main executable (chmod +x, single file, ~4800 lines)
 ├── CLAUDE.md                 # This file — project structure map
 ├── CHANGELOG.md              # Keep a Changelog format + SemVer
 ├── README.md                 # GitHub README
@@ -35,7 +35,7 @@ redictum-terminal-py/
 ├── .gitignore
 ├── .github/
 │   └── workflows/ci.yml      # CI pipeline
-├── tests/                    # Unit tests (pytest, 502 tests)
+├── tests/                    # Unit tests (pytest, 574 tests)
 │   ├── conftest.py
 │   ├── test_app.py
 │   ├── test_app_pipeline.py
@@ -61,10 +61,11 @@ redictum-terminal-py/
 │   ├── test_update.py
 │   ├── test_verbose_quiet.py
 │   └── test_volume_controller.py
-├── e2e/                      # E2E test infrastructure (Docker, 19 tests)
+├── e2e/                      # E2E test infrastructure (Docker, 20 tests)
 │   ├── Dockerfile
 │   ├── run_e2e.sh
 │   ├── fake-arecord
+│   ├── fake-pactl
 │   ├── fake-paplay
 │   └── fake-whisper-cli
 ├── sandbox/                  # Dev sandbox for interactive testing in Docker

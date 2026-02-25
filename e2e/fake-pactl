@@ -1,0 +1,14 @@
+#!/bin/bash
+# Fake pactl: simulate PulseAudio volume control without a running daemon.
+# get-sink-volume: return a fixed 50% volume.
+# set-sink-volume: accept silently (no-op).
+
+case "$1" in
+    get-sink-volume)
+        echo "Volume: front-left: 32768 /  50% / -18.06 dB , front-right: 32768 /  50% / -18.06 dB"
+        ;;
+    set-sink-volume)
+        # Accept silently
+        ;;
+esac
+exit 0

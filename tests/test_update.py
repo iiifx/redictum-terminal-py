@@ -102,6 +102,35 @@ class TestCurlWgetFetcher:
         with pytest.raises(RedictumError, match="Neither curl nor wget"):
             fetcher.download_to_file("http://example.com/f", tmp_path / "out.bin")
 
+    def test_fetch_text_nonzero_rc_raises(self, monkeypatch):
+        from redictum import CurlWgetFetcher, RedictumError
+
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/curl")
+        fake_result = subprocess.CompletedProcess(args=[], returncode=22, stdout="", stderr="")
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
+
+        fetcher = CurlWgetFetcher()
+        with pytest.raises(RedictumError, match="failed"):
+            fetcher.fetch_text("http://example.com")
+
+    def test_download_to_file_with_wget_fallback(self, tmp_path, monkeypatch):
+        from redictum import CurlWgetFetcher
+
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/wget" if x == "wget" else None)
+        dest = tmp_path / "out.bin"
+
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            dest.write_bytes(b"data")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        fetcher = CurlWgetFetcher()
+        fetcher.download_to_file("http://example.com/f", dest)
+        assert calls[0][0] == "wget"
+
     def test_download_to_file_failure_raises(self, tmp_path, monkeypatch):
         from redictum import CurlWgetFetcher, RedictumError
 

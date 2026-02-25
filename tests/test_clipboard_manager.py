@@ -144,6 +144,80 @@ class TestXclipBackend:
         assert calls[0][1]["input"] == b"data"
 
 
+class TestXclipBackendErrorPaths:
+    """XclipBackend: error handling when tools are missing or hang."""
+
+    def test_copy_file_not_found(self, monkeypatch):
+        from redictum import XclipBackend
+
+        monkeypatch.setattr("subprocess.run", MagicMock(side_effect=FileNotFoundError))
+        backend = XclipBackend()
+        backend.copy("hello")  # must not raise
+
+    def test_paste_timeout(self, monkeypatch):
+        import subprocess
+
+        from redictum import XclipBackend
+
+        monkeypatch.setattr(
+            "subprocess.run",
+            MagicMock(side_effect=subprocess.TimeoutExpired("xdotool", 5)),
+        )
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        backend = XclipBackend()
+        backend.paste()  # must not raise
+
+
+class TestXclipBackendTargetValidation:
+    """XclipBackend._validate_target: rejects unsafe target strings."""
+
+    def test_valid_mime_types(self):
+        from redictum import XclipBackend
+
+        for target in ("text/plain", "image/png", "text/html;charset=utf-8",
+                        "UTF8_STRING", "STRING", "TEXT", "text/x-moz-url"):
+            assert XclipBackend._validate_target(target), f"should accept {target!r}"
+
+    def test_rejects_empty(self):
+        from redictum import XclipBackend
+
+        assert not XclipBackend._validate_target("")
+
+    def test_rejects_null_bytes(self):
+        from redictum import XclipBackend
+
+        assert not XclipBackend._validate_target("text/plain\x00evil")
+
+    def test_rejects_newlines(self):
+        from redictum import XclipBackend
+
+        assert not XclipBackend._validate_target("text/plain\nevil")
+
+    def test_rejects_spaces(self):
+        from redictum import XclipBackend
+
+        assert not XclipBackend._validate_target("text/ plain")
+
+    def test_save_target_rejects_unsafe(self, monkeypatch):
+        from redictum import XclipBackend
+
+        calls = []
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: calls.append(1))
+        backend = XclipBackend()
+        result = backend.save_target("text/plain\x00evil")
+        assert result is None
+        assert calls == []  # subprocess never called
+
+    def test_restore_target_rejects_unsafe(self, monkeypatch):
+        from redictum import XclipBackend
+
+        calls = []
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: calls.append(1))
+        backend = XclipBackend()
+        backend.restore_target("bad\nnewline", b"data")
+        assert calls == []  # subprocess never called
+
+
 # ── ClipboardManager integration tests (via XclipBackend) ───────────
 
 
@@ -255,6 +329,26 @@ class TestSaveRestore:
             r = MagicMock()
             r.returncode = 1
             r.stdout = ""
+            return r
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        assert clipboard.save() is None
+
+    def test_save_returns_none_when_save_target_fails(self, clipboard, monkeypatch):
+        """save() returns None when target is detected but data read fails."""
+        call_count = [0]
+
+        def fake_run(cmd, **kwargs):
+            r = MagicMock()
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # get_targets returns a valid target
+                r.returncode = 0
+                r.stdout = "TARGETS\ntext/plain\n"
+            else:
+                # save_target fails (empty data)
+                r.returncode = 1
+                r.stdout = b""
             return r
 
         monkeypatch.setattr("subprocess.run", fake_run)

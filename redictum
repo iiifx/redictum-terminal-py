@@ -2127,6 +2127,7 @@ class ArecordRecorder(AudioRecorderBackend):
                 "-t", "wav",
                 str(output_path),
             ],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -2183,16 +2184,22 @@ class AudioRecorder:
         rc = self._backend.stop()
         if rc is None:
             return None
-        # arecord returns 1 or -15 (SIGTERM) when we terminate it — expected.
+        # Backend returns 1 or -15 (SIGTERM) when we terminate it — expected.
         if rc not in (0, 1, -signal.SIGTERM):
-            logging.error("arecord exited with code %d", rc)
+            logging.error("Recording backend exited with code %d", rc)
 
         path = self._current_file
         self._current_file = None
-        if path is None or not path.exists() or path.stat().st_size == 0:
+        if path is None:
+            logging.warning("Recording file missing: no path set")
+            return None
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        if size == 0:
             logging.warning("Recording file empty or missing: %s", path)
-            if path and path.exists():
-                path.unlink()
+            path.unlink(missing_ok=True)
             return None
         logging.info("Recording stopped: %s", path.name)
         return path
@@ -2643,6 +2650,13 @@ class ClipboardBackend(ABC):
 class XclipBackend(ClipboardBackend):
     """X11 clipboard via xclip + xdotool."""
 
+    _SAFE_TARGET = re.compile(r"^[\w/+\-.;=]+$")
+
+    @staticmethod
+    def _validate_target(target: str) -> bool:
+        """Check that *target* is a safe MIME-like string."""
+        return bool(XclipBackend._SAFE_TARGET.match(target))
+
     def copy(self, text: str) -> None:
         """Copy text to clipboard via xclip."""
         try:
@@ -2695,6 +2709,9 @@ class XclipBackend(ClipboardBackend):
 
     def save_target(self, target: str) -> bytes | None:
         """Read raw clipboard data for *target* via xclip."""
+        if not self._validate_target(target):
+            logging.warning("Clipboard save: rejected unsafe target %r", target)
+            return None
         try:
             result = subprocess.run(
                 ["xclip", "-selection", "clipboard", "-t", target, "-o"],
@@ -2714,6 +2731,9 @@ class XclipBackend(ClipboardBackend):
 
     def restore_target(self, target: str, data: bytes) -> None:
         """Write raw data to clipboard for *target* via xclip."""
+        if not self._validate_target(target):
+            logging.warning("Clipboard restore: rejected unsafe target %r", target)
+            return
         try:
             subprocess.run(
                 ["xclip", "-selection", "clipboard", "-t", target],
@@ -2817,6 +2837,11 @@ class PactlVolumeBackend(VolumeBackend):
                 ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
                 capture_output=True, text=True, timeout=2,
             )
+            if result.returncode != 0:
+                logging.warning(
+                    "pactl get-sink-volume failed (code %d)", result.returncode,
+                )
+                return None
             match = re.search(r"(\d+)%", result.stdout)
             if match:
                 return int(match.group(1))
@@ -3041,6 +3066,8 @@ class SoundPlayerBackend(ABC):
 class PaplayPlayer(SoundPlayerBackend):
     """PulseAudio player via paplay."""
 
+    _WAIT_TIMEOUT = 10
+
     def __init__(self) -> None:
         self._warned = False
 
@@ -3050,14 +3077,27 @@ class PaplayPlayer(SoundPlayerBackend):
         try:
             proc = subprocess.Popen(
                 ["paplay", f"--volume={vol_scaled}", str(wav_path)],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            threading.Thread(target=proc.wait, daemon=True).start()
+            threading.Thread(
+                target=self._reap, args=(proc,), daemon=True,
+            ).start()
         except FileNotFoundError:
             if not self._warned:
                 logging.warning("paplay not found, sound notifications disabled")
                 self._warned = True
+
+    @classmethod
+    def _reap(cls, proc: subprocess.Popen) -> None:  # type: ignore[type-arg]
+        """Wait for paplay with timeout; kill if stuck."""
+        try:
+            proc.wait(timeout=cls._WAIT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            logging.warning("paplay did not finish in %ds, killed", cls._WAIT_TIMEOUT)
 
 
 class SoundNotifier:
@@ -3068,8 +3108,8 @@ class SoundNotifier:
     of this module for the synthesis code.
     """
 
-    def __init__(self, player: SoundPlayerBackend, volume: int = 30) -> None:
-        self._player = player
+    def __init__(self, backend: SoundPlayerBackend, volume: int = 30) -> None:
+        self._backend = backend
         self._volume = max(0, min(100, volume))
         self._temp_dir: Path | None = None
         self._sounds: dict[str, Path] = {}
@@ -3114,7 +3154,7 @@ class SoundNotifier:
         wav_path = self._sounds.get(name)
         if wav_path is None or not wav_path.exists():
             return
-        self._player.play(wav_path, self._volume)
+        self._backend.play(wav_path, self._volume)
 
     def _write_wav(self, filename: str, samples: list[float]) -> Path:
         peak = max(abs(s) for s in samples) or 1.0
@@ -4331,8 +4371,8 @@ class RedictumApp:
             tr_backend, language, prompt=dep.get("whisper_prompt", ""),
         )
         self._clipboard = ClipboardManager(XclipBackend())
-        player = PaplayPlayer()
-        self._notifier = SoundNotifier(player, volume=self._sound_cfg.get("sound_signal_volume", 30))
+        sound_backend = PaplayPlayer()
+        self._notifier = SoundNotifier(sound_backend, volume=self._sound_cfg.get("sound_signal_volume", 30))
         if self._audio_cfg.get("recording_volume_reduce", True):
             vol_backend = PactlVolumeBackend()
             self._volume_ctl: VolumeController | None = VolumeController(

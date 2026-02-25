@@ -6,14 +6,14 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
-# -- Fake player for injection -----------------------------------------------
+# -- Fake backend for injection ----------------------------------------------
 
 
-def _make_fake_player():
-    """Create a FakeSoundPlayer instance (imports lazily)."""
+def _make_fake_backend():
+    """Create a FakeSoundBackend instance (imports lazily)."""
     from redictum import SoundPlayerBackend
 
-    class FakeSoundPlayer(SoundPlayerBackend):
+    class FakeSoundBackend(SoundPlayerBackend):
         """Test double that records play() calls."""
 
         def __init__(self) -> None:
@@ -22,7 +22,7 @@ def _make_fake_player():
         def play(self, wav_path: Path, volume: int) -> None:
             self.played.append((wav_path, volume))
 
-    return FakeSoundPlayer()
+    return FakeSoundBackend()
 
 
 # -- SoundPlayerBackend ABC --------------------------------------------------
@@ -102,6 +102,46 @@ class TestPaplayPlayer:
         player.play(wav, 100)
         assert mock_popen.call_args[0][0][1] == "--volume=65536"
 
+    def test_popen_stdin_devnull(self, tmp_path, monkeypatch):
+        """play() passes stdin=DEVNULL to Popen."""
+        import subprocess
+
+        from redictum import PaplayPlayer
+
+        player = PaplayPlayer()
+        wav = tmp_path / "tone.wav"
+        wav.write_bytes(b"RIFF" + b"\x00" * 40)
+
+        mock_popen = MagicMock()
+        monkeypatch.setattr("subprocess.Popen", mock_popen)
+        player.play(wav, 50)
+        assert mock_popen.call_args[1]["stdin"] is subprocess.DEVNULL
+
+    def test_reap_kills_on_timeout(self, caplog):
+        """_reap() kills the process when wait() times out."""
+        import logging
+        import subprocess
+
+        from redictum import PaplayPlayer
+
+        proc = MagicMock()
+        proc.wait.side_effect = [subprocess.TimeoutExpired("paplay", 10), None]
+
+        with caplog.at_level(logging.WARNING):
+            PaplayPlayer._reap(proc)
+
+        proc.kill.assert_called_once()
+        assert any("killed" in r.message for r in caplog.records)
+
+    def test_reap_normal_exit(self):
+        """_reap() returns cleanly when wait() succeeds."""
+        from redictum import PaplayPlayer
+
+        proc = MagicMock()
+        proc.wait.return_value = 0
+        PaplayPlayer._reap(proc)  # no error
+        proc.kill.assert_not_called()
+
     def test_file_not_found_warns_once(self, tmp_path, monkeypatch, caplog):
         """play() warns once when paplay is not installed."""
         import logging
@@ -141,7 +181,7 @@ class TestEnsureTonesThreadSafety:
             lambda prefix="": str(tones_dir),
         )
 
-        notifier = SoundNotifier(_make_fake_player(), volume=30)
+        notifier = SoundNotifier(_make_fake_backend(), volume=30)
         barrier = threading.Barrier(4)
         errors = []
 
@@ -166,7 +206,7 @@ class TestEnsureTonesThreadSafety:
         """SoundNotifier must have _init_lock for thread-safe initialization."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(_make_fake_player(), volume=30)
+        notifier = SoundNotifier(_make_fake_backend(), volume=30)
         assert hasattr(notifier, "_init_lock")
         assert isinstance(notifier._init_lock, type(threading.Lock()))
 
@@ -222,14 +262,14 @@ class TestGenerateTones:
 
 
 class TestPlay:
-    """SoundNotifier._play: delegates to injected player."""
+    """SoundNotifier._play: delegates to injected backend."""
 
-    def test_play_delegates_to_player(self, tmp_path):
-        """_play() passes wav_path and volume to the injected player."""
+    def test_play_delegates_to_backend(self, tmp_path):
+        """_play() passes wav_path and volume to the injected backend."""
         from redictum import SoundNotifier
 
-        player = _make_fake_player()
-        notifier = SoundNotifier(player, volume=50)
+        backend = _make_fake_backend()
+        notifier = SoundNotifier(backend, volume=50)
         wav = tmp_path / "start.wav"
         wav.write_bytes(b"RIFF" + b"\x00" * 40)
         notifier._sounds = {"start": wav}
@@ -237,32 +277,32 @@ class TestPlay:
 
         notifier._play("start")
 
-        assert len(player.played) == 1
-        assert player.played[0] == (wav, 50)
+        assert len(backend.played) == 1
+        assert backend.played[0] == (wav, 50)
 
     def test_wav_not_found(self, tmp_path):
         """_play() silently returns when wav file is missing."""
         from redictum import SoundNotifier
 
-        player = _make_fake_player()
-        notifier = SoundNotifier(player, volume=30)
+        backend = _make_fake_backend()
+        notifier = SoundNotifier(backend, volume=30)
         notifier._sounds = {"start": tmp_path / "nonexistent.wav"}
         notifier._temp_dir = tmp_path
 
         notifier._play("start")
-        assert len(player.played) == 0
+        assert len(backend.played) == 0
 
     def test_unknown_sound_name(self, tmp_path):
         """_play() silently returns for unknown sound name."""
         from redictum import SoundNotifier
 
-        player = _make_fake_player()
-        notifier = SoundNotifier(player, volume=30)
+        backend = _make_fake_backend()
+        notifier = SoundNotifier(backend, volume=30)
         notifier._sounds = {}
         notifier._temp_dir = tmp_path
 
         notifier._play("nonexistent")
-        assert len(player.played) == 0
+        assert len(backend.played) == 0
 
 
 # -- cleanup() ----------------------------------------------------------------
@@ -275,7 +315,7 @@ class TestCleanup:
         """cleanup() removes the temp directory."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(_make_fake_player(), volume=30)
+        notifier = SoundNotifier(_make_fake_backend(), volume=30)
         tones_dir = tmp_path / "tones"
         tones_dir.mkdir()
         (tones_dir / "test.wav").write_bytes(b"data")
@@ -288,7 +328,7 @@ class TestCleanup:
         """cleanup() is safe when _temp_dir is None."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(_make_fake_player(), volume=30)
+        notifier = SoundNotifier(_make_fake_backend(), volume=30)
         assert notifier._temp_dir is None
         notifier.cleanup()  # Should not raise
 
@@ -297,46 +337,46 @@ class TestCleanup:
 
 
 class TestVolumeScaling:
-    """Volume percentage passed through to player."""
+    """Volume percentage passed through to backend."""
 
     def test_volume_50_percent(self, tmp_path):
-        """volume=50 passed to player.play()."""
+        """volume=50 passed to backend.play()."""
         from redictum import SoundNotifier
 
-        player = _make_fake_player()
-        notifier = SoundNotifier(player, volume=50)
+        backend = _make_fake_backend()
+        notifier = SoundNotifier(backend, volume=50)
         wav = tmp_path / "start.wav"
         wav.write_bytes(b"RIFF" + b"\x00" * 40)
         notifier._sounds = {"start": wav}
         notifier._temp_dir = tmp_path
 
         notifier._play("start")
-        assert player.played[0][1] == 50
+        assert backend.played[0][1] == 50
 
     def test_volume_0_percent(self, tmp_path):
-        """volume=0 passed to player.play()."""
+        """volume=0 passed to backend.play()."""
         from redictum import SoundNotifier
 
-        player = _make_fake_player()
-        notifier = SoundNotifier(player, volume=0)
+        backend = _make_fake_backend()
+        notifier = SoundNotifier(backend, volume=0)
         wav = tmp_path / "start.wav"
         wav.write_bytes(b"RIFF" + b"\x00" * 40)
         notifier._sounds = {"start": wav}
         notifier._temp_dir = tmp_path
 
         notifier._play("start")
-        assert player.played[0][1] == 0
+        assert backend.played[0][1] == 0
 
     def test_volume_100_percent(self, tmp_path):
-        """volume=100 passed to player.play()."""
+        """volume=100 passed to backend.play()."""
         from redictum import SoundNotifier
 
-        player = _make_fake_player()
-        notifier = SoundNotifier(player, volume=100)
+        backend = _make_fake_backend()
+        notifier = SoundNotifier(backend, volume=100)
         wav = tmp_path / "start.wav"
         wav.write_bytes(b"RIFF" + b"\x00" * 40)
         notifier._sounds = {"start": wav}
         notifier._temp_dir = tmp_path
 
         notifier._play("start")
-        assert player.played[0][1] == 100
+        assert backend.played[0][1] == 100

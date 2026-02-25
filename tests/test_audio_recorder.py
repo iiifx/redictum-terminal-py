@@ -106,6 +106,28 @@ class TestArecordRecorder:
         backend = ArecordRecorder(device="pulse")
         backend.cancel()  # no error
 
+    def test_cancel_kills_on_timeout(self, tmp_path, monkeypatch):
+        """cancel() kills the process when terminate() doesn't stop it in time."""
+        from redictum import ArecordRecorder
+
+        mock_proc = MagicMock()
+        mock_proc.wait.side_effect = [subprocess.TimeoutExpired("arecord", 2), None]
+        monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: mock_proc)
+        backend = ArecordRecorder(device="pulse")
+        backend.start(tmp_path / "test.wav")
+        backend.cancel()
+        mock_proc.kill.assert_called_once()
+
+    def test_start_stdin_devnull(self, tmp_path, monkeypatch):
+        """start() passes stdin=DEVNULL to Popen."""
+        from redictum import ArecordRecorder
+
+        mock_popen = MagicMock()
+        monkeypatch.setattr("subprocess.Popen", mock_popen)
+        backend = ArecordRecorder(device="pulse")
+        backend.start(tmp_path / "test.wav")
+        assert mock_popen.call_args[1]["stdin"] is subprocess.DEVNULL
+
 
 # ── AudioRecorder integration tests (via ArecordRecorder) ────────────
 
@@ -157,6 +179,16 @@ class TestStop:
 
     def test_returns_none_when_not_started(self, recorder):
         assert recorder.stop() is None
+
+    def test_returns_none_when_file_disappears(self, recorder, monkeypatch):
+        """stop() handles file vanishing between stop and stat (TOCTOU)."""
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: mock_proc)
+        recorder.start()
+        # Don't create the file — simulates file not existing
+        result = recorder.stop()
+        assert result is None
 
 
 class TestCancel:

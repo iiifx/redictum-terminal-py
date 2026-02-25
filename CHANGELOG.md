@@ -15,13 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Mouse button support in hotkeys (back, forward, middle and combos with modifiers)
 
 ### Changed
-- Extract `SoundPlayerBackend` ABC from `SoundNotifier`: platform-specific `paplay` logic moved to `PaplayPlayer`, tone generation stays in `SoundNotifier`
-- Extract `AudioRecorderBackend` ABC from `AudioRecorder`: `arecord` subprocess management moved to `ArecordRecorder`
-- Extract `AudioProcessorBackend` ABC from `AudioProcessor`: `ffmpeg` normalization moved to `FfmpegProcessor`
-- Extract `TranscriberBackend` ABC from `Transcriber`: `whisper-cli` subprocess moved to `WhisperCliTranscriber`
-- Extract `ClipboardBackend` ABC from `ClipboardManager`: `xclip`/`xdotool` subprocess moved to `XclipBackend`
-- Extract `VolumeBackend` ABC from `VolumeController`: `pactl` subprocess moved to `PactlVolumeBackend`
-- Extract `HttpFetcherBackend` ABC from `RedictumApp`: `curl`/`wget` subprocess moved to `CurlWgetFetcher`
+- Backend Strategy Pattern: extract ABCs for all subprocess-dependent components (audio, transcription, clipboard, volume, HTTP), enabling future alternative implementations
 
 ### Fixed
 - Volume not fully restored when multiple redictum instances run simultaneously
