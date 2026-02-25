@@ -1,9 +1,129 @@
-"""Tests for SoundNotifier."""
+"""Tests for SoundNotifier, SoundPlayerBackend, and PaplayPlayer."""
 from __future__ import annotations
 
 import struct
 import threading
+from pathlib import Path
 from unittest.mock import MagicMock
+
+# -- Fake player for injection -----------------------------------------------
+
+
+def _make_fake_player():
+    """Create a FakeSoundPlayer instance (imports lazily)."""
+    from redictum import SoundPlayerBackend
+
+    class FakeSoundPlayer(SoundPlayerBackend):
+        """Test double that records play() calls."""
+
+        def __init__(self) -> None:
+            self.played: list[tuple[Path, int]] = []
+
+        def play(self, wav_path: Path, volume: int) -> None:
+            self.played.append((wav_path, volume))
+
+    return FakeSoundPlayer()
+
+
+# -- SoundPlayerBackend ABC --------------------------------------------------
+
+
+class TestSoundPlayerBackendABC:
+    """SoundPlayerBackend cannot be instantiated directly."""
+
+    def test_cannot_instantiate(self):
+        """ABC raises TypeError on direct instantiation."""
+        import pytest
+        from redictum import SoundPlayerBackend
+
+        with pytest.raises(TypeError):
+            SoundPlayerBackend()  # type: ignore[abstract]
+
+    def test_subclass_must_implement_play(self):
+        """Concrete subclass without play() raises TypeError."""
+        import pytest
+        from redictum import SoundPlayerBackend
+
+        class Broken(SoundPlayerBackend):
+            pass
+
+        with pytest.raises(TypeError):
+            Broken()  # type: ignore[abstract]
+
+
+# -- PaplayPlayer ------------------------------------------------------------
+
+
+class TestPaplayPlayer:
+    """PaplayPlayer: subprocess.Popen call and error handling."""
+
+    def test_calls_popen_with_correct_args(self, tmp_path, monkeypatch):
+        """play() invokes paplay with scaled volume and wav path."""
+        from redictum import PaplayPlayer
+
+        player = PaplayPlayer()
+        wav = tmp_path / "tone.wav"
+        wav.write_bytes(b"RIFF" + b"\x00" * 40)
+
+        mock_popen = MagicMock()
+        monkeypatch.setattr("subprocess.Popen", mock_popen)
+
+        player.play(wav, 50)
+
+        mock_popen.assert_called_once()
+        args = mock_popen.call_args[0][0]
+        assert args[0] == "paplay"
+        assert args[1] == "--volume=32768"
+        assert args[2] == str(wav)
+
+    def test_volume_scaling_0(self, tmp_path, monkeypatch):
+        """volume=0 → paplay volume 0."""
+        from redictum import PaplayPlayer
+
+        player = PaplayPlayer()
+        wav = tmp_path / "tone.wav"
+        wav.write_bytes(b"RIFF" + b"\x00" * 40)
+
+        mock_popen = MagicMock()
+        monkeypatch.setattr("subprocess.Popen", mock_popen)
+        player.play(wav, 0)
+        assert mock_popen.call_args[0][0][1] == "--volume=0"
+
+    def test_volume_scaling_100(self, tmp_path, monkeypatch):
+        """volume=100 → paplay volume 65536."""
+        from redictum import PaplayPlayer
+
+        player = PaplayPlayer()
+        wav = tmp_path / "tone.wav"
+        wav.write_bytes(b"RIFF" + b"\x00" * 40)
+
+        mock_popen = MagicMock()
+        monkeypatch.setattr("subprocess.Popen", mock_popen)
+        player.play(wav, 100)
+        assert mock_popen.call_args[0][0][1] == "--volume=65536"
+
+    def test_file_not_found_warns_once(self, tmp_path, monkeypatch, caplog):
+        """play() warns once when paplay is not installed."""
+        import logging
+
+        from redictum import PaplayPlayer
+
+        player = PaplayPlayer()
+        wav = tmp_path / "tone.wav"
+        wav.write_bytes(b"RIFF" + b"\x00" * 40)
+
+        monkeypatch.setattr("subprocess.Popen", MagicMock(side_effect=FileNotFoundError))
+
+        with caplog.at_level(logging.WARNING):
+            player.play(wav, 30)
+            player.play(wav, 30)
+
+        assert player._warned is True
+        warning_count = sum(1 for r in caplog.records if "paplay not found" in r.message)
+        assert warning_count == 1
+
+
+# -- SoundNotifier._ensure_tones thread safety -------------------------------
 
 
 class TestEnsureTonesThreadSafety:
@@ -21,7 +141,7 @@ class TestEnsureTonesThreadSafety:
             lambda prefix="": str(tones_dir),
         )
 
-        notifier = SoundNotifier(volume=30)
+        notifier = SoundNotifier(_make_fake_player(), volume=30)
         barrier = threading.Barrier(4)
         errors = []
 
@@ -46,9 +166,12 @@ class TestEnsureTonesThreadSafety:
         """SoundNotifier must have _init_lock for thread-safe initialization."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(volume=30)
+        notifier = SoundNotifier(_make_fake_player(), volume=30)
         assert hasattr(notifier, "_init_lock")
         assert isinstance(notifier._init_lock, type(threading.Lock()))
+
+
+# -- _write_wav ---------------------------------------------------------------
 
 
 class TestWriteWav:
@@ -75,6 +198,9 @@ class TestWriteWav:
         assert riff_size == 36 + pcm_len
 
 
+# -- _generate_tones ----------------------------------------------------------
+
+
 class TestGenerateTones:
     """_generate_tones: produces 4 named tone lists."""
 
@@ -92,84 +218,55 @@ class TestGenerateTones:
             assert all(isinstance(s, float) for s in samples)
 
 
-# -- _play() ----------------------------------------------------------------
+# -- _play() ------------------------------------------------------------------
+
 
 class TestPlay:
-    """SoundNotifier._play: Popen call and error handling."""
+    """SoundNotifier._play: delegates to injected player."""
 
-    def test_play_calls_paplay(self, tmp_path, monkeypatch):
-        """_play() invokes paplay with correct volume and wav path."""
+    def test_play_delegates_to_player(self, tmp_path):
+        """_play() passes wav_path and volume to the injected player."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(volume=50)
-        # Pre-populate sounds to skip _ensure_tones
+        player = _make_fake_player()
+        notifier = SoundNotifier(player, volume=50)
         wav = tmp_path / "start.wav"
         wav.write_bytes(b"RIFF" + b"\x00" * 40)
         notifier._sounds = {"start": wav}
         notifier._temp_dir = tmp_path
 
-        mock_popen = MagicMock()
-        monkeypatch.setattr("subprocess.Popen", mock_popen)
-
         notifier._play("start")
 
-        mock_popen.assert_called_once()
-        args = mock_popen.call_args[0][0]
-        assert args[0] == "paplay"
-        # volume=50 → 50/100 * 65536 = 32768
-        assert args[1] == "--volume=32768"
-        assert args[2] == str(wav)
+        assert len(player.played) == 1
+        assert player.played[0] == (wav, 50)
 
-    def test_wav_not_found(self, tmp_path, monkeypatch):
+    def test_wav_not_found(self, tmp_path):
         """_play() silently returns when wav file is missing."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(volume=30)
+        player = _make_fake_player()
+        notifier = SoundNotifier(player, volume=30)
         notifier._sounds = {"start": tmp_path / "nonexistent.wav"}
         notifier._temp_dir = tmp_path
 
-        mock_popen = MagicMock()
-        monkeypatch.setattr("subprocess.Popen", mock_popen)
         notifier._play("start")
-        mock_popen.assert_not_called()
+        assert len(player.played) == 0
 
-    def test_paplay_not_found_warns_once(self, tmp_path, monkeypatch, caplog):
-        """_play() warns once when paplay is not found."""
-        import logging
-
-        from redictum import SoundNotifier
-
-        notifier = SoundNotifier(volume=30)
-        wav = tmp_path / "start.wav"
-        wav.write_bytes(b"RIFF" + b"\x00" * 40)
-        notifier._sounds = {"start": wav}
-        notifier._temp_dir = tmp_path
-
-        monkeypatch.setattr("subprocess.Popen", MagicMock(side_effect=FileNotFoundError))
-
-        with caplog.at_level(logging.WARNING):
-            notifier._play("start")
-            notifier._play("start")
-
-        assert notifier._warned_no_paplay is True
-        warning_count = sum(1 for r in caplog.records if "paplay not found" in r.message)
-        assert warning_count == 1
-
-    def test_unknown_sound_name(self, tmp_path, monkeypatch):
+    def test_unknown_sound_name(self, tmp_path):
         """_play() silently returns for unknown sound name."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(volume=30)
+        player = _make_fake_player()
+        notifier = SoundNotifier(player, volume=30)
         notifier._sounds = {}
         notifier._temp_dir = tmp_path
 
-        mock_popen = MagicMock()
-        monkeypatch.setattr("subprocess.Popen", mock_popen)
         notifier._play("nonexistent")
-        mock_popen.assert_not_called()
+        assert len(player.played) == 0
 
 
-# -- cleanup() ---------------------------------------------------------------
+# -- cleanup() ----------------------------------------------------------------
+
 
 class TestCleanup:
     """SoundNotifier.cleanup: remove temp directory."""
@@ -178,7 +275,7 @@ class TestCleanup:
         """cleanup() removes the temp directory."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(volume=30)
+        notifier = SoundNotifier(_make_fake_player(), volume=30)
         tones_dir = tmp_path / "tones"
         tones_dir.mkdir()
         (tones_dir / "test.wav").write_bytes(b"data")
@@ -191,57 +288,55 @@ class TestCleanup:
         """cleanup() is safe when _temp_dir is None."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(volume=30)
+        notifier = SoundNotifier(_make_fake_player(), volume=30)
         assert notifier._temp_dir is None
         notifier.cleanup()  # Should not raise
 
 
-# -- Volume scaling ----------------------------------------------------------
+# -- Volume passing -----------------------------------------------------------
+
 
 class TestVolumeScaling:
-    """Volume percentage to paplay volume scaling."""
+    """Volume percentage passed through to player."""
 
-    def test_volume_50_percent(self, tmp_path, monkeypatch):
-        """volume=50 → 32768."""
+    def test_volume_50_percent(self, tmp_path):
+        """volume=50 passed to player.play()."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(volume=50)
+        player = _make_fake_player()
+        notifier = SoundNotifier(player, volume=50)
         wav = tmp_path / "start.wav"
         wav.write_bytes(b"RIFF" + b"\x00" * 40)
         notifier._sounds = {"start": wav}
         notifier._temp_dir = tmp_path
 
-        mock_popen = MagicMock()
-        monkeypatch.setattr("subprocess.Popen", mock_popen)
         notifier._play("start")
-        assert mock_popen.call_args[0][0][1] == "--volume=32768"
+        assert player.played[0][1] == 50
 
-    def test_volume_0_percent(self, tmp_path, monkeypatch):
-        """volume=0 → 0."""
+    def test_volume_0_percent(self, tmp_path):
+        """volume=0 passed to player.play()."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(volume=0)
+        player = _make_fake_player()
+        notifier = SoundNotifier(player, volume=0)
         wav = tmp_path / "start.wav"
         wav.write_bytes(b"RIFF" + b"\x00" * 40)
         notifier._sounds = {"start": wav}
         notifier._temp_dir = tmp_path
 
-        mock_popen = MagicMock()
-        monkeypatch.setattr("subprocess.Popen", mock_popen)
         notifier._play("start")
-        assert mock_popen.call_args[0][0][1] == "--volume=0"
+        assert player.played[0][1] == 0
 
-    def test_volume_100_percent(self, tmp_path, monkeypatch):
-        """volume=100 → 65536."""
+    def test_volume_100_percent(self, tmp_path):
+        """volume=100 passed to player.play()."""
         from redictum import SoundNotifier
 
-        notifier = SoundNotifier(volume=100)
+        player = _make_fake_player()
+        notifier = SoundNotifier(player, volume=100)
         wav = tmp_path / "start.wav"
         wav.write_bytes(b"RIFF" + b"\x00" * 40)
         notifier._sounds = {"start": wav}
         notifier._temp_dir = tmp_path
 
-        mock_popen = MagicMock()
-        monkeypatch.setattr("subprocess.Popen", mock_popen)
         notifier._play("start")
-        assert mock_popen.call_args[0][0][1] == "--volume=65536"
+        assert player.played[0][1] == 100

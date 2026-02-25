@@ -21,7 +21,7 @@ System-wide voice-to-text CLI utility for Linux. Captures hotkeys, records micro
 ## Project Structure
 ```
 redictum-terminal-py/
-├── redictum                  # Main executable (chmod +x, single file, ~4000 lines)
+├── redictum                  # Main executable (chmod +x, single file, ~4500 lines)
 ├── CLAUDE.md                 # This file — project structure map
 ├── CHANGELOG.md              # Keep a Changelog format + SemVer
 ├── README.md                 # GitHub README
@@ -35,7 +35,7 @@ redictum-terminal-py/
 ├── .gitignore
 ├── .github/
 │   └── workflows/ci.yml      # CI pipeline
-├── tests/                    # Unit tests (pytest, 443 tests)
+├── tests/                    # Unit tests (pytest, 502 tests)
 │   ├── conftest.py
 │   ├── test_app.py
 │   ├── test_app_pipeline.py
@@ -57,10 +57,11 @@ redictum-terminal-py/
 │   ├── test_sound_notifier.py
 │   ├── test_state_manager.py
 │   ├── test_transcriber.py
+│   ├── test_hotkey_command.py
 │   ├── test_update.py
 │   ├── test_verbose_quiet.py
 │   └── test_volume_controller.py
-├── e2e/                      # E2E test infrastructure (Docker, 18 tests)
+├── e2e/                      # E2E test infrastructure (Docker, 19 tests)
 │   ├── Dockerfile
 │   ├── run_e2e.sh
 │   ├── fake-arecord
@@ -70,7 +71,6 @@ redictum-terminal-py/
 │   ├── Dockerfile.sandbox
 │   └── sandbox.sh
 ├── .wip/                     # WIP docs: bugs, features, ideas (gitignored)
-│   ├── design.md             # Original design document
 │   ├── bug-*.md              # One bug per file
 │   ├── feature-*.md          # One feature per file
 │   ├── done/                 # Completed items
@@ -103,6 +103,7 @@ redictum-terminal-py/
 | `./redictum setup` | Re-run optional dependency setup |
 | `./redictum language` | Change transcription language |
 | `./redictum whisper` | Setup whisper.cpp (install, check, reconfigure) |
+| `./redictum hotkey` | Change push-to-talk hotkey |
 | `./redictum update` | Update to the latest version |
 | `./redictum --reset-config` | Delete config + state, force full re-setup |
 | `./redictum --set k=v` | Override any config option at runtime |
@@ -136,8 +137,10 @@ redictum-terminal-py/
 | `Transcriber` | Transcribe via whisper-cli (--translate for English, language-aware prompts) |
 | `ClipboardManager` | xclip copy/paste + universal save/restore (text, images, binary via X11 TARGETS) |
 | `VolumeController` | System volume save/restore during recording |
-| `SoundNotifier` | WAV feedback tones via paplay (lazy init) |
-| `HotkeyListener` | Push-to-talk via pynput (hold delay, modifier combos, translate mode) |
+| `SoundPlayerBackend` | ABC for sound playback (play a WAV at a given volume) |
+| `PaplayPlayer` | PulseAudio implementation via paplay |
+| `SoundNotifier` | WAV feedback tones (lazy generation, delegates playback to SoundPlayerBackend) |
+| `HotkeyListener` | Push-to-talk via pynput (keyboard + mouse buttons, hold delay, modifier combos, translate mode) |
 | `Housekeeping` | Rotate audio + transcript + log files |
 | `RedictumError` | Base exception class |
 | `_OptionalDep` | Lazy-load optional dependencies (rich) |

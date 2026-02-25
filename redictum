@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -2844,6 +2845,36 @@ class VolumeController:
             logging.info("Volume restore deferred (other instances active)")
 
 
+class SoundPlayerBackend(ABC):
+    """Abstract sound player — play a WAV file at a given volume."""
+
+    @abstractmethod
+    def play(self, wav_path: Path, volume: int) -> None:
+        """Play *wav_path* at *volume* (0–100)."""
+
+
+class PaplayPlayer(SoundPlayerBackend):
+    """PulseAudio player via paplay."""
+
+    def __init__(self) -> None:
+        self._warned = False
+
+    def play(self, wav_path: Path, volume: int) -> None:
+        """Play *wav_path* at *volume* (0–100) via paplay."""
+        vol_scaled = int(volume / 100 * 65536)
+        try:
+            proc = subprocess.Popen(
+                ["paplay", f"--volume={vol_scaled}", str(wav_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            threading.Thread(target=proc.wait, daemon=True).start()
+        except FileNotFoundError:
+            if not self._warned:
+                logging.warning("paplay not found, sound notifications disabled")
+                self._warned = True
+
+
 class SoundNotifier:
     """Play WAV feedback tones via paplay.
 
@@ -2852,12 +2883,12 @@ class SoundNotifier:
     of this module for the synthesis code.
     """
 
-    def __init__(self, volume: int = 30) -> None:
+    def __init__(self, player: SoundPlayerBackend, volume: int = 30) -> None:
+        self._player = player
         self._volume = max(0, min(100, volume))
         self._temp_dir: Path | None = None
         self._sounds: dict[str, Path] = {}
         self._init_lock = threading.Lock()
-        self._warned_no_paplay = False
 
     def play_start(self) -> None:
         """Play the 'recording started' tone."""
@@ -2898,18 +2929,7 @@ class SoundNotifier:
         wav_path = self._sounds.get(name)
         if wav_path is None or not wav_path.exists():
             return
-        vol_scaled = int(self._volume / 100 * 65536)
-        try:
-            proc = subprocess.Popen(
-                ["paplay", f"--volume={vol_scaled}", str(wav_path)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            threading.Thread(target=proc.wait, daemon=True).start()
-        except FileNotFoundError:
-            if not self._warned_no_paplay:
-                logging.warning("paplay not found, sound notifications disabled")
-                self._warned_no_paplay = True
+        self._player.play(wav_path, self._volume)
 
     def _write_wav(self, filename: str, samples: list[float]) -> Path:
         peak = max(abs(s) for s in samples) or 1.0
@@ -4092,7 +4112,8 @@ class RedictumApp:
             timeout=dep.get("whisper_timeout", 120),
         )
         self._clipboard = ClipboardManager()
-        self._notifier = SoundNotifier(volume=self._sound_cfg.get("sound_signal_volume", 30))
+        player = PaplayPlayer()
+        self._notifier = SoundNotifier(player, volume=self._sound_cfg.get("sound_signal_volume", 30))
         if self._audio_cfg.get("recording_volume_reduce", True):
             self._volume_ctl: VolumeController | None = VolumeController(
                 self._audio_cfg.get("recording_volume_level", 30),

@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `hotkey` command — interactive push-to-talk hotkey reassignment
 - Mouse button support in hotkeys (back, forward, middle and combos with modifiers)
 
+### Changed
+- Extract `SoundPlayerBackend` ABC from `SoundNotifier`: platform-specific `paplay` logic moved to `PaplayPlayer`, tone generation stays in `SoundNotifier`
+
 ### Fixed
 - Volume not fully restored when multiple redictum instances run simultaneously
 
