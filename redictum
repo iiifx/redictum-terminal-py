@@ -37,7 +37,7 @@ try:
 except ImportError:
     _console = None
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -3855,18 +3855,6 @@ class RedictumApp:
 
         _rprint("\nPress Ctrl+C to stop.")
 
-    def _show_config_hint(self) -> None:
-        """Show config file location and examples after first run."""
-        if self._state_mgr.get("config_hint_shown"):
-            return
-        _rprint(f"\n[bold]Configuration:[/bold] {self._config_mgr.path}")
-        _rprint("  Examples:")
-        _rprint('    \u2022 Change hotkey:   [cyan]hotkey_key = "F12"[/cyan]'
-               '          (default: Insert)')
-        _rprint('    \u2022 Change language: [cyan]whisper_language = "en"[/cyan]'
-               '      (default: auto)')
-        self._state_mgr.set("config_hint_shown", True)
-
     def _fix_optional_mismatch(self) -> None:
         """Re-check optional deps if config says enabled but tool is gone."""
         if self._check_optional_mismatch(self._config):
@@ -3905,7 +3893,6 @@ class RedictumApp:
 
         if first_run:
             self._first_run_language_check(self._config)
-            self._show_config_hint()
 
         self._record_run_timestamp()
 
