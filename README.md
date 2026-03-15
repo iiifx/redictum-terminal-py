@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/iiifx/redictum-terminal-py/actions/workflows/ci.yml/badge.svg)](https://github.com/iiifx/redictum-terminal-py/actions/workflows/ci.yml)
 
+> **Note:** Development of Redictum is paused. I recommend [Handy](https://github.com/cjpais/Handy) — a free, open-source, cross-platform speech-to-text app that works completely offline. It supports Whisper and Parakeet models, GPU acceleration, Wayland, and runs on Linux, macOS, and Windows.
+
 **Simple. All-in-one. Run. Hold. Talk. Enjoy!**
 
 Voice-to-text CLI for Linux. Uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for local speech recognition. No cloud APIs, everything runs on your machine.
