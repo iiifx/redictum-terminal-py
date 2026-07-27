@@ -71,7 +71,7 @@ redictum-terminal-py/
 ├── sandbox/                  # Dev sandbox for interactive testing in Docker
 │   ├── Dockerfile.sandbox
 │   └── sandbox.sh
-├── .wip/                     # WIP docs: bugs, features, ideas (gitignored)
+├── .wip/                     # WIP docs: bugs, features, ideas (tracked in git)
 │   ├── bug-*.md              # One bug per file
 │   ├── feature-*.md          # One feature per file
 │   ├── done/                 # Completed items
